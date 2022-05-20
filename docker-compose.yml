@@ -5,21 +5,24 @@ services:
     build:
       dockerfile: Dockerfile
       context: ./frontend/
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /var/cache/nginx:uid=101,gid=101
       - /var/run:uid=101,gid=101
       - /app/tmp:uid=101,gid=101
     environment:
-      SUBSTRATE_TELEMETRY_URL: ws://localhost:8000/feed
+      SUBSTRATE_TELEMETRY_URL: wss://telemetry.subspace.network/feed
+#      SUBSTRATE_TELEMETRY_URL: ws://localhost:8000/feed
     ports:
-      - 3000:8000
+      - 127.0.0.1:3000:8000
     expose:
       - 3000
   telemetry-backend-shard:
     build:
       dockerfile: Dockerfile
       context: ./backend/
+    restart: unless-stopped
     read_only: true
     command: [
       'telemetry_shard',
@@ -27,19 +30,21 @@ services:
       '--core', 'http://telemetry-backend-core:8000/shard_submit'
     ]
     ports:
-      - 8001:8001
+      - 127.0.0.1:8001:8001
     expose:
       - 8001
   telemetry-backend-core:
     build:
       dockerfile: Dockerfile
       context: ./backend/
+    restart: unless-stopped
     read_only: true
     command: [
       'telemetry_core',
-      '--listen', '0.0.0.0:8000'
+      '--listen', '0.0.0.0:8000',
+      '--max-third-party-nodes', '100000'
     ]
     ports:
-      - 8000:8000
+      - 127.0.0.1:8000:8000
     expose:
       - 8000
