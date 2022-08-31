@@ -35,6 +35,7 @@ export namespace Chain {
     settings: PersistentObject<AppState.Settings>;
     pins: PersistentSet<Types.NodeName>;
     sortBy: Persistent<Maybe<number>>;
+    disableNodeViews?: boolean;
   }
 
   export interface State {
@@ -76,10 +77,13 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
           blockTimestamp={blockTimestamp}
           currentTab={currentTab}
           setDisplay={this.setDisplay}
+          hideSettingsNav={this.props.disableNodeViews}
         />
-        <div className="Chain-content-container">
-          <div className="Chain-content">{this.renderContent()}</div>
-        </div>
+        {!this.props.disableNodeViews && (
+          <div className="Chain-content-container">
+            <div className="Chain-content">{this.renderContent()}</div>
+          </div>
+        )}
       </div>
     );
   }

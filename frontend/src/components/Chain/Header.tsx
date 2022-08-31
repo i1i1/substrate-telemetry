@@ -40,6 +40,7 @@ export namespace Header {
     blockAverage: Maybe<Types.Milliseconds>;
     currentTab: Chain.Display;
     setDisplay: (display: Chain.Display) => void;
+    hideSettingsNav?: boolean;
   }
 }
 
@@ -74,40 +75,42 @@ export class Header extends React.Component<Header.Props, {}> {
         <Tile icon={lastTimeIcon} title="Last Block">
           <Ago when={blockTimestamp} />
         </Tile>
-        <div className="Header-tabs">
-          <Tab
-            icon={listIcon}
-            label="List"
-            display="list"
-            tab=""
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={worldIcon}
-            label="Map"
-            display="map"
-            tab="map"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={statsIcon}
-            label="Stats"
-            display="stats"
-            tab="stats"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={settingsIcon}
-            label="Settings"
-            display="settings"
-            tab="settings"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-        </div>
+        {!this.props.hideSettingsNav && (
+          <div className="Header-tabs">
+            <Tab
+              icon={listIcon}
+              label="List"
+              display="list"
+              tab=""
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={worldIcon}
+              label="Map"
+              display="map"
+              tab="map"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={statsIcon}
+              label="Stats"
+              display="stats"
+              tab="stats"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={settingsIcon}
+              label="Settings"
+              display="settings"
+              tab="settings"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+          </div>
+        )}
       </div>
     );
   }
