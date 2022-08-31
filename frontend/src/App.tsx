@@ -175,6 +175,7 @@ export default class App extends React.Component<{}, {}> {
           pins={this.pins}
           sortBy={this.sortBy}
           disableNodeViews={DISABLE_NODES}
+          subscribedData={subscribedData}
         />
         {overlay}
       </div>
