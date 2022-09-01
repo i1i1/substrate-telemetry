@@ -17,7 +17,7 @@
 import * as React from 'react';
 import { Connection } from '../../Connection';
 import { Types, Maybe } from '../../common';
-import { State as AppState, Update as AppUpdate } from '../../state';
+import { State as AppState, Update as AppUpdate, ChainData } from '../../state';
 import { getHashData } from '../../utils';
 import { Header } from './';
 import { List, Map, Settings, Stats } from '../';
@@ -36,6 +36,7 @@ export namespace Chain {
     pins: PersistentSet<Types.NodeName>;
     sortBy: Persistent<Maybe<number>>;
     disableNodeViews?: boolean;
+    subscribedData: Maybe<ChainData>;
   }
 
   export interface State {
@@ -64,7 +65,7 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
   }
 
   public render() {
-    const { appState } = this.props;
+    const { appState, subscribedData } = this.props;
     const { best, finalized, blockTimestamp, blockAverage } = appState;
     const { display: currentTab } = this.state;
 
@@ -73,6 +74,7 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
         <Header
           best={best}
           finalized={finalized}
+          nodeCount={subscribedData?.nodeCount ?? 0}
           blockAverage={blockAverage}
           blockTimestamp={blockTimestamp}
           currentTab={currentTab}
