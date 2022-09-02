@@ -63,7 +63,8 @@ export class Map extends React.Component<Map.Props, Map.State> {
   public render() {
     const { appState } = this.props;
     const { filter } = this.state;
-    const nodes = appState.nodes.sorted();
+    let nodes = appState.nodes.sorted();
+    nodes = nodes.length <= 1300 ? nodes : nodes.slice(0, 1300);
 
     return (
       <React.Fragment>
