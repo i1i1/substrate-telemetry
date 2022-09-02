@@ -81,23 +81,31 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
           setDisplay={this.setDisplay}
           hideSettingsNav={this.props.disableNodeViews}
         />
-        {!this.props.disableNodeViews && (
-          <div className="Chain-content-container">
-            <div className="Chain-content">{this.renderContent()}</div>
-          </div>
-        )}
+        <div className="Chain-content-container">
+          <div className="Chain-content">{this.renderContent()}</div>
+        </div>
       </div>
     );
   }
 
   private renderContent() {
     const { display } = this.state;
+    const {
+      appState,
+      appUpdate,
+      connection,
+      pins,
+      sortBy,
+      disableNodeViews,
+    } = this.props;
+
+    if (display === 'stats' || disableNodeViews) {
+      return <Stats appState={appState} />;
+    }
 
     if (display === 'settings') {
       return <Settings settings={this.props.settings} />;
     }
-
-    const { appState, appUpdate, connection, pins, sortBy } = this.props;
 
     if (display === 'list') {
       return (
@@ -112,10 +120,6 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
 
     if (display === 'map') {
       return <Map appState={appState} />;
-    }
-
-    if (display === 'stats') {
-      return <Stats appState={appState} />;
     }
 
     throw new Error('invalid `display`: ${display}');
