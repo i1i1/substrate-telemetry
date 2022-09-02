@@ -183,7 +183,7 @@ export class Connection {
         case ACTIONS.BestBlock: {
           const [best, blockTimestamp, blockAverage] = message.payload;
 
-          nodes.mutEach((node) => node.newBestBlock());
+          nodes.mutEachAndSort((node) => node.newBestBlock());
 
           this.appUpdate({ best, blockTimestamp, blockAverage });
 
@@ -250,7 +250,7 @@ export class Connection {
 
           const id = message.payload;
 
-          nodes.mutAndSort(id, (node) => node.setStale(true));
+          nodes.mut(id, (node) => node.setStale(true));
 
           break;
         }
@@ -262,11 +262,7 @@ export class Connection {
 
           const [id, lat, lon, city] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateLocation([lat, lon, city]),
-            sortByColumn === LocationColumn
-          );
+          nodes.mut(id, (node) => node.updateLocation([lat, lon, city]));
 
           break;
         }
@@ -278,7 +274,7 @@ export class Connection {
 
           const [id, blockDetails] = message.payload;
 
-          nodes.mutAndSort(id, (node) => node.updateBlock(blockDetails));
+          nodes.mut(id, (node) => node.updateBlock(blockDetails));
 
           break;
         }
@@ -290,12 +286,7 @@ export class Connection {
 
           const [id, height, hash] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateFinalized(height, hash),
-            sortByColumn === FinalizedBlockColumn ||
-              sortByColumn === FinalizedHashColumn
-          );
+          nodes.mut(id, (node) => node.updateFinalized(height, hash));
 
           break;
         }
@@ -307,11 +298,7 @@ export class Connection {
 
           const [id, nodeStats] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateStats(nodeStats),
-            sortByColumn === PeersColumn || sortByColumn === TxsColumn
-          );
+          nodes.mut(id, (node) => node.updateStats(nodeStats));
 
           break;
         }
@@ -323,11 +310,7 @@ export class Connection {
 
           const [id, nodeHardware] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateHardware(nodeHardware),
-            sortByColumn === UploadColumn || sortByColumn === DownloadColumn
-          );
+          nodes.mut(id, (node) => node.updateHardware(nodeHardware));
 
           break;
         }
@@ -339,11 +322,7 @@ export class Connection {
 
           const [id, nodeIO] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateIO(nodeIO),
-            sortByColumn === StateCacheColumn
-          );
+          nodes.mut(id, (node) => node.updateIO(nodeIO));
 
           break;
         }
