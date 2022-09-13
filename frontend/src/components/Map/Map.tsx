@@ -39,6 +39,13 @@ interface MapState {
   left: number;
 }
 
+type LocationItem = {
+  nodeCount: number;
+  position: LocationPosition;
+};
+
+type Locations = Record<string, LocationItem>;
+
 export class Map extends React.Component<MapProps, MapState> {
   public state: MapState = {
     filter: null,
@@ -58,33 +65,38 @@ export class Map extends React.Component<MapProps, MapState> {
     window.removeEventListener('resize', this.onResize);
   }
 
+  private getNodeLocations(nodes: Node[]): Locations {
+    return nodes.reduce((acc, { city, lat, lon }) => {
+      // Skip nodes with unknown location
+      if (city && lat && lon) {
+        if (acc[city]) {
+          acc[city].nodeCount += 1;
+        } else {
+          acc[city] = {
+            nodeCount: 1,
+            position: this.pixelPosition(lat, lon),
+          };
+        }
+      }
+      return acc;
+    }, {});
+  }
+
   public render() {
     const { appState } = this.props;
-    const { filter } = this.state;
-    let nodes = appState.nodes.getList();
-    nodes = nodes.length <= 1300 ? nodes : nodes.slice(0, 1300);
+    const nodes = appState.nodes.getList();
+    const locations = this.getNodeLocations(nodes);
 
     return (
       <React.Fragment>
         <div className="Map">
-          {nodes.map((node) => {
-            const { lat, lon } = node;
-
-            const focused = filter == null || filter(node);
-
-            if (lat == null || lon == null) {
-              // Skip nodes with unknown location
-              return null;
-            }
-
-            const position = this.pixelPosition(lat, lon);
-
+          {Object.entries(locations).map(([city, { position, nodeCount }]) => {
             return (
               <Location
-                key={node.id}
+                key={city}
                 position={position}
-                focused={focused}
-                node={node}
+                nodeCount={nodeCount}
+                city={city}
               />
             );
           })}
