@@ -1,30 +1,54 @@
 use std::sync::Arc;
 
+use clap::Parser;
 use fdlimit::raise_fd_limit;
 use futures::stream::{FuturesUnordered, TryStreamExt};
 use test_utils::server::{CoreProcess, ShardProcess};
 use tokio::sync::Mutex;
 
+#[derive(clap::Parser, Debug)]
+struct Args {
+    /// Number of shards (nodes which will submit some info)
+    #[clap(short, long, value_parser)]
+    shards: usize,
+    // Number of feeds (subscribers like browser tabs)
+    #[clap(short, long, value_parser)]
+    feeds: usize,
+    // Number of connections to open, per task
+    #[clap(short, long, value_parser, default_value_t = 10)]
+    connections_per_task: usize,
+
+    /// Telemetry host
+    #[clap(value_parser)]
+    host: String,
+}
+
 #[tokio::main]
 async fn main() {
-    raise_fd_limit().unwrap();
-    let host = std::env::var("HOST").expect("Set HOST variable first");
+    let Args {
+        shards,
+        feeds,
+        connections_per_task,
+        host,
+    } = Args::parse();
 
-    let ntasks = 1000;
-    let per_task = 10;
+    raise_fd_limit().unwrap();
 
     let start = std::time::Instant::now();
 
-    let shards = (0..ntasks)
+    let shards = (0..shards / connections_per_task)
         .map(|i| {
             let x = ShardProcess::from_host(format!("{host}:8001"));
             async move {
-                let res = x.connect_multiple_nodes(per_task).await.map(|x| {
-                    x.into_iter()
-                        .map(Mutex::new)
-                        .map(Arc::new)
-                        .collect::<Vec<_>>()
-                });
+                let res = x
+                    .connect_multiple_nodes(connections_per_task)
+                    .await
+                    .map(|x| {
+                        x.into_iter()
+                            .map(Mutex::new)
+                            .map(Arc::new)
+                            .collect::<Vec<_>>()
+                    });
                 eprintln!("{i}");
                 res
             }
@@ -37,11 +61,11 @@ async fn main() {
         .flatten()
         .collect::<Vec<_>>();
 
-    let _feeds = (0..500)
+    let _feeds = (0..feeds / connections_per_task)
         .map(|i| {
             let x = CoreProcess::from_host(format!("{host}:8000"));
             async move {
-                let res = x.connect_multiple_feeds(per_task).await;
+                let res = x.connect_multiple_feeds(connections_per_task).await;
                 eprintln!("Feed {i}");
                 res
             }

@@ -22,3 +22,4 @@ flume = "0.10.8"
 
 [dev-dependencies]
 fdlimit = "0.2"
+clap = { version = "3.2", features = ["derive"] }
