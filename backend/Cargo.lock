@@ -1762,6 +1762,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "term_size"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e4129646ca0ed8f45d09b929036bafad5377103edd06e50bf574b353d2b08d9"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "termcolor"
 version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1775,6 +1785,7 @@ name = "test_utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap 3.2.2",
  "common",
  "fdlimit",
@@ -1788,6 +1799,7 @@ dependencies = [
  "time 0.3.0",
  "tokio",
  "tokio-util",
+ "zzz",
 ]
 
 [[package]]
@@ -2193,3 +2205,13 @@ name = "wyz"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85e60b0d1b5f99db2556934e21937020776a5d31520bf169e851ac44e6420214"
+
+[[package]]
+name = "zzz"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba63ef3620132b6a9cacdc3d643ac08f26b5f31fb321f4cb8d69569ed43347c"
+dependencies = [
+ "futures-core",
+ "term_size",
+]
