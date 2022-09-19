@@ -366,6 +366,18 @@ pub struct Process<Channel> {
     _channel_type: PhantomData<Channel>,
 }
 
+impl<T> Process<T> {
+    pub fn from_host(host: String) -> Self {
+        Self {
+            host,
+
+            id: ProcessId(0),
+            handle: None,
+            _channel_type: PhantomData,
+        }
+    }
+}
+
 /// A shard process with shard-specific methods.
 pub type ShardProcess = Process<(channels::ShardSender, channels::ShardReceiver)>;
 
