@@ -17,7 +17,12 @@
 import * as React from 'react';
 import { Connection } from '../../Connection';
 import { Types, Maybe } from '../../common';
-import { State as AppState, Update as AppUpdate } from '../../state';
+import {
+  State as AppState,
+  Update as AppUpdate,
+  StateSettings,
+  ChainData,
+} from '../../state';
 import { getHashData } from '../../utils';
 import { Header } from './';
 import { List, Map, Settings, Stats } from '../';
@@ -25,28 +30,28 @@ import { Persistent, PersistentObject, PersistentSet } from '../../persist';
 
 import './Chain.css';
 
-export namespace Chain {
-  export type Display = 'list' | 'map' | 'settings' | 'consensus' | 'stats';
+export type ChainDisplay = 'list' | 'map' | 'settings' | 'consensus' | 'stats';
 
-  export interface Props {
-    appState: Readonly<AppState>;
-    appUpdate: AppUpdate;
-    connection: Promise<Connection>;
-    settings: PersistentObject<AppState.Settings>;
-    pins: PersistentSet<Types.NodeName>;
-    sortBy: Persistent<Maybe<number>>;
-  }
-
-  export interface State {
-    display: Display;
-  }
+interface ChainProps {
+  appState: Readonly<AppState>;
+  appUpdate: AppUpdate;
+  connection: Promise<Connection>;
+  settings: PersistentObject<StateSettings>;
+  pins: PersistentSet<Types.NodeName>;
+  sortBy: Persistent<Maybe<number>>;
+  disableNodeViews?: boolean;
+  subscribedData: Maybe<ChainData>;
 }
 
-export class Chain extends React.Component<Chain.Props, Chain.State> {
-  constructor(props: Chain.Props) {
+interface ChainState {
+  display: ChainDisplay;
+}
+
+export class Chain extends React.Component<ChainProps, ChainState> {
+  constructor(props: ChainProps) {
     super(props);
 
-    let display: Chain.Display = 'list';
+    let display: ChainDisplay = 'list';
 
     switch (getHashData().tab) {
       case 'map':
@@ -63,19 +68,33 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
   }
 
   public render() {
-    const { appState } = this.props;
-    const { best, finalized, blockTimestamp, blockAverage } = appState;
+    const { appState, subscribedData } = this.props;
+    const {
+      best,
+      finalized,
+      blockTimestamp,
+      blockAverage,
+      spacePledged,
+      uniqueAddressCount,
+    } = appState;
     const { display: currentTab } = this.state;
+
+    // TODO: temporary workaround until we have better way to fetch space pledged for all chains
+    const isGemini = subscribedData?.label === 'Subspace Gemini 2a';
 
     return (
       <div className="Chain">
         <Header
           best={best}
           finalized={finalized}
+          nodeCount={subscribedData?.nodeCount ?? 0}
           blockAverage={blockAverage}
           blockTimestamp={blockTimestamp}
           currentTab={currentTab}
           setDisplay={this.setDisplay}
+          hideSettingsNav={this.props.disableNodeViews}
+          spacePledged={isGemini ? spacePledged : undefined}
+          uniqueAddressCount={isGemini ? uniqueAddressCount : undefined}
         />
         <div className="Chain-content-container">
           <div className="Chain-content">{this.renderContent()}</div>
@@ -86,12 +105,40 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
 
   private renderContent() {
     const { display } = this.state;
+    const { appState, appUpdate, pins, sortBy, disableNodeViews } = this.props;
+
+    if (display === 'stats' || disableNodeViews) {
+      return (
+        <>
+          {disableNodeViews && (
+            <div className="Chain-note">
+              <p>
+                The node list is currently disabled as we are encountering a
+                large amount of traffic. Please bear with us as we make
+                improvements to our telemetry.
+              </p>
+              <p>
+                In the meantime, if you wish to verify that your node and farmer
+                are up and running, please visit the{' '}
+                <a
+                  href="https://polkadot.js.org/apps/?rpc=wss%3A%2F%2Feu-0.gemini-2a.subspace.network%2Fws#/accounts"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Polkadot/Substrate Portal
+                </a>{' '}
+                using your reward address to check your balance.
+              </p>
+            </div>
+          )}
+          <Stats appState={appState} />
+        </>
+      );
+    }
 
     if (display === 'settings') {
       return <Settings settings={this.props.settings} />;
     }
-
-    const { appState, appUpdate, connection, pins, sortBy } = this.props;
 
     if (display === 'list') {
       return (
@@ -108,14 +155,10 @@ export class Chain extends React.Component<Chain.Props, Chain.State> {
       return <Map appState={appState} />;
     }
 
-    if (display === 'stats') {
-      return <Stats appState={appState} />;
-    }
-
     throw new Error('invalid `display`: ${display}');
   }
 
-  private setDisplay = (display: Chain.Display) => {
+  private setDisplay = (display: ChainDisplay) => {
     this.setState({ display });
   };
 }

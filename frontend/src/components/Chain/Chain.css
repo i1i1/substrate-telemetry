@@ -32,3 +32,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   color: #fff;
   box-shadow: rgba(0, 0, 0, 0.5) 0 3px 30px;
 }
+
+.Chain-note {
+  padding: 40px 40px 0;
+}
+
+.Chain-note a {
+  color: inherit;
+  text-decoration-color: #562b8e;
+}

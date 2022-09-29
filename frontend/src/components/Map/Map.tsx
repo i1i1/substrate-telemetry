@@ -18,7 +18,7 @@ import * as React from 'react';
 import { Types, Maybe } from '../../common';
 import { Filter } from '../';
 import { State as AppState, Node } from '../../state';
-import { Location } from './';
+import { Location, LocationQuarter, LocationPosition } from './';
 import { viewport } from '../../utils';
 
 const MAP_RATIO = 800 / 350;
@@ -27,22 +27,27 @@ const HEADER = 148;
 
 import './Map.css';
 
-export namespace Map {
-  export interface Props {
-    appState: Readonly<AppState>;
-  }
-
-  export interface State {
-    filter: Maybe<(node: Node) => boolean>;
-    width: number;
-    height: number;
-    top: number;
-    left: number;
-  }
+interface MapProps {
+  appState: Readonly<AppState>;
 }
 
-export class Map extends React.Component<Map.Props, Map.State> {
-  public state: Map.State = {
+interface MapState {
+  filter: Maybe<(node: Node) => boolean>;
+  width: number;
+  height: number;
+  top: number;
+  left: number;
+}
+
+type LocationItem = {
+  nodeCount: number;
+  position: LocationPosition;
+};
+
+type Locations = Record<string, LocationItem>;
+
+export class Map extends React.Component<MapProps, MapState> {
+  public state: MapState = {
     filter: null,
     width: 0,
     height: 0,
@@ -60,32 +65,38 @@ export class Map extends React.Component<Map.Props, Map.State> {
     window.removeEventListener('resize', this.onResize);
   }
 
+  private getNodeLocations(nodes: Node[]): Locations {
+    return nodes.reduce((acc, { city, lat, lon }) => {
+      // Skip nodes with unknown location
+      if (city && lat && lon) {
+        if (acc[city]) {
+          acc[city].nodeCount += 1;
+        } else {
+          acc[city] = {
+            nodeCount: 1,
+            position: this.pixelPosition(lat, lon),
+          };
+        }
+      }
+      return acc;
+    }, {});
+  }
+
   public render() {
     const { appState } = this.props;
-    const { filter } = this.state;
-    const nodes = appState.nodes.sorted();
+    const nodes = appState.nodes.getList();
+    const locations = this.getNodeLocations(nodes);
 
     return (
       <React.Fragment>
         <div className="Map">
-          {nodes.map((node) => {
-            const { lat, lon } = node;
-
-            const focused = filter == null || filter(node);
-
-            if (lat == null || lon == null) {
-              // Skip nodes with unknown location
-              return null;
-            }
-
-            const position = this.pixelPosition(lat, lon);
-
+          {Object.entries(locations).map(([city, { position, nodeCount }]) => {
             return (
               <Location
-                key={node.id}
+                key={city}
                 position={position}
-                focused={focused}
-                node={node}
+                nodeCount={nodeCount}
+                city={city}
               />
             );
           })}
@@ -98,7 +109,7 @@ export class Map extends React.Component<Map.Props, Map.State> {
   private pixelPosition(
     lat: Types.Latitude,
     lon: Types.Longitude
-  ): Location.Position {
+  ): LocationPosition {
     const { state } = this;
 
     // Longitude ranges -180 (west) to +180 (east)
@@ -108,14 +119,14 @@ export class Map extends React.Component<Map.Props, Map.State> {
       ((90 - lat) / 180) * state.height * MAP_HEIGHT_ADJUST + state.top
     );
 
-    let quarter: Location.Quarter = 0;
+    let quarter: LocationQuarter = 0;
 
     if (lon > 0) {
-      quarter = (quarter | 1) as Location.Quarter;
+      quarter = (quarter | 1) as LocationQuarter;
     }
 
     if (lat < 0) {
-      quarter = (quarter | 2) as Location.Quarter;
+      quarter = (quarter | 2) as LocationQuarter;
     }
 
     return { left, top, quarter };

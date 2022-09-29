@@ -44,6 +44,25 @@ where
     }
 }
 
+pub trait FeedMessageWriter {
+    fn push<M: FeedMessageWrite>(&mut self, msg: M);
+
+    fn write(&mut self, value: &impl Serialize);
+
+    /// Return the bytes that we've serialized so far, consuming the serializer.
+    fn into_finalized(self) -> Option<bytes::Bytes>;
+}
+
+pub struct DiscardFeedMessages;
+
+impl FeedMessageWriter for DiscardFeedMessages {
+    fn push<M: FeedMessageWrite>(&mut self, _msg: M) {}
+    fn write(&mut self, _value: &impl Serialize) {}
+    fn into_finalized(self) -> Option<bytes::Bytes> {
+        None
+    }
+}
+
 pub struct FeedMessageSerializer {
     /// Current buffer,
     buffer: Vec<u8>,
@@ -57,31 +76,27 @@ impl FeedMessageSerializer {
             buffer: Vec::with_capacity(BUFCAP),
         }
     }
+}
 
-    pub fn push<Message>(&mut self, msg: Message)
-    where
-        Message: FeedMessageWrite,
-    {
+impl FeedMessageWriter for FeedMessageSerializer {
+    fn push<M: FeedMessageWrite>(&mut self, msg: M) {
         let glue = match self.buffer.len() {
             0 => b'[',
             _ => b',',
         };
 
         self.buffer.push(glue);
-        self.write(&Message::ACTION);
+        self.write(&M::ACTION);
         self.buffer.push(b',');
         msg.write_to_feed(self);
     }
 
-    fn write<S>(&mut self, value: &S)
-    where
-        S: Serialize,
-    {
+    fn write(&mut self, value: &impl Serialize) {
         let _ = to_writer(&mut self.buffer, value);
     }
 
     /// Return the bytes that we've serialized so far, consuming the serializer.
-    pub fn into_finalized(mut self) -> Option<bytes::Bytes> {
+    fn into_finalized(mut self) -> Option<bytes::Bytes> {
         if self.buffer.is_empty() {
             return None;
         }
@@ -185,7 +200,6 @@ impl FeedMessageWrite for AddedNode<'_> {
         let details = node.details();
         let details = (
             &details.name,
-            &details.implementation,
             &details.version,
             &details.validator,
             &details.network_id,
@@ -217,16 +231,4 @@ pub struct Ranking<K> {
 #[derive(Serialize, PartialEq, Eq, Default)]
 pub struct ChainStats {
     pub version: Ranking<String>,
-    pub target_os: Ranking<String>,
-    pub target_arch: Ranking<String>,
-    pub cpu: Ranking<String>,
-    pub memory: Ranking<(u32, Option<u32>)>,
-    pub core_count: Ranking<u32>,
-    pub linux_kernel: Ranking<String>,
-    pub linux_distro: Ranking<String>,
-    pub is_virtual_machine: Ranking<bool>,
-    pub cpu_hashrate_score: Ranking<(u32, Option<u32>)>,
-    pub memory_memcpy_score: Ranking<(u32, Option<u32>)>,
-    pub disk_sequential_write_score: Ranking<(u32, Option<u32>)>,
-    pub disk_random_write_score: Ranking<(u32, Option<u32>)>,
 }

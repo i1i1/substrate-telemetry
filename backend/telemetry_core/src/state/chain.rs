@@ -20,10 +20,9 @@ use common::node_types::{Block, Timestamp};
 use common::{id_type, time, DenseMap, MostSeen, NumStats};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use crate::feed_message::{self, ChainStats, FeedMessageSerializer};
+use crate::feed_message::{self, ChainStats, FeedMessageWriter};
 use crate::find_location;
 
 use super::chain_stats::ChainStatsCollator;
@@ -82,9 +81,7 @@ pub struct RemoveNodeResult {
 
 /// Genesis hashes of chains we consider "first party". These chains allow any
 /// number of nodes to connect.
-static FIRST_PARTY_NETWORKS: Lazy<HashSet<BlockHash>> = Lazy::new(|| {
-    Default::default()
-});
+static FIRST_PARTY_NETWORKS: Lazy<HashSet<BlockHash>> = Lazy::new(Default::default);
 
 /// When we construct a chain, we want to check to see whether or not it's a "first party"
 /// network first, and assign a `max_nodes` accordingly. This helps us do that.
@@ -124,7 +121,7 @@ impl Chain {
 
         let details = node.details();
         self.stats_collator
-            .add_or_remove_node(details, None, CounterValue::Increment);
+            .add_or_remove_node(details, CounterValue::Increment);
 
         let node_chain_label = &details.chain;
         let label_result = self.labels.insert(node_chain_label);
@@ -149,7 +146,7 @@ impl Chain {
 
         let details = node.details();
         self.stats_collator
-            .add_or_remove_node(details, node.hwbench(), CounterValue::Decrement);
+            .add_or_remove_node(details, CounterValue::Decrement);
 
         let node_chain_label = &node.details().chain;
         let label_result = self.labels.remove(node_chain_label);
@@ -164,7 +161,7 @@ impl Chain {
         &mut self,
         nid: ChainNodeId,
         payload: Payload,
-        feed: &mut FeedMessageSerializer,
+        feed: &mut impl FeedMessageWriter,
     ) {
         if let Some(block) = payload.best_block() {
             self.handle_block(block, nid, feed);
@@ -192,19 +189,6 @@ impl Chain {
                     }
                     return;
                 }
-                Payload::HwBench(ref hwbench) => {
-                    let new_hwbench = common::node_types::NodeHwBench {
-                        cpu_hashrate_score: hwbench.cpu_hashrate_score,
-                        memory_memcpy_score: hwbench.memory_memcpy_score,
-                        disk_sequential_write_score: hwbench.disk_sequential_write_score,
-                        disk_random_write_score: hwbench.disk_random_write_score,
-                    };
-                    let old_hwbench = node.update_hwbench(new_hwbench);
-                    self.stats_collator
-                        .update_hwbench(old_hwbench.as_ref(), CounterValue::Decrement);
-                    self.stats_collator
-                        .update_hwbench(node.hwbench(), CounterValue::Increment);
-                }
                 _ => {}
             }
 
@@ -228,7 +212,7 @@ impl Chain {
         }
     }
 
-    fn handle_block(&mut self, block: &Block, nid: ChainNodeId, feed: &mut FeedMessageSerializer) {
+    fn handle_block(&mut self, block: &Block, nid: ChainNodeId, feed: &mut impl FeedMessageWriter) {
         let mut propagation_time = None;
         let now = time::now();
         let nodes_len = self.nodes.len();
@@ -276,7 +260,7 @@ impl Chain {
 
     /// Check if the chain is stale (has not received a new best block in a while).
     /// If so, find a new best block, ignoring any stale nodes and marking them as such.
-    fn update_stale_nodes(&mut self, now: u64, feed: &mut FeedMessageSerializer) {
+    fn update_stale_nodes(&mut self, now: u64, feed: &mut impl FeedMessageWriter) {
         let threshold = now - STALE_TIMEOUT;
         let timestamp = match self.timestamp {
             Some(ts) => ts,
@@ -325,7 +309,7 @@ impl Chain {
         }
     }
 
-    fn regenerate_stats_if_necessary(&mut self, feed: &mut FeedMessageSerializer) {
+    fn regenerate_stats_if_necessary(&mut self, feed: &mut impl FeedMessageWriter) {
         let now = Instant::now();
         let elapsed = now - self.stats_last_regenerated;
         if elapsed < STATS_UPDATE_INTERVAL {

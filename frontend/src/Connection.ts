@@ -13,23 +13,11 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
-
 import { VERSION, timestamp, FeedMessage, Types, Maybe, sleep } from './common';
 import { State, Update, Node, ChainData, PINNED_CHAINS } from './state';
 import { PersistentSet } from './persist';
 import { getHashData, setHashData } from './utils';
 import { ACTIONS } from './common/feed';
-import {
-  Column,
-  LocationColumn,
-  PeersColumn,
-  TxsColumn,
-  FinalizedBlockColumn,
-  FinalizedHashColumn,
-  UploadColumn,
-  DownloadColumn,
-  StateCacheColumn,
-} from './components/List';
 
 const CONNECTION_TIMEOUT_BASE = (1000 * 5) as Types.Milliseconds; // 5 seconds
 const CONNECTION_TIMEOUT_MAX = (1000 * 60 * 5) as Types.Milliseconds; // 5 minutes
@@ -45,9 +33,16 @@ export class Connection {
   public static async create(
     pins: PersistentSet<Types.NodeName>,
     appState: Readonly<State>,
-    appUpdate: Update
+    appUpdate: Update,
+    disableNodes?: boolean
   ): Promise<Connection> {
-    return new Connection(await Connection.socket(), appState, appUpdate, pins);
+    return new Connection(
+      await Connection.socket(),
+      appState,
+      appUpdate,
+      pins,
+      disableNodes
+    );
   }
 
   private static readonly utf8decoder = new TextDecoder('utf-8');
@@ -68,7 +63,7 @@ export class Connection {
       return `wss://${window.location.hostname}/feed/`;
     }
 
-    return `ws://127.0.0.1:8000/feed`;
+    return 'ws://127.0.0.1:8000/feed';
   }
 
   private static async socket(): Promise<WebSocket> {
@@ -89,7 +84,7 @@ export class Connection {
   }
 
   private static async trySocket(): Promise<Maybe<WebSocket>> {
-    return new Promise<Maybe<WebSocket>>((resolve, _) => {
+    return new Promise<Maybe<WebSocket>>((resolve) => {
       function clean() {
         socket.removeEventListener('open', onSuccess);
         socket.removeEventListener('close', onFailure);
@@ -129,7 +124,8 @@ export class Connection {
     private socket: WebSocket,
     private readonly appState: Readonly<State>,
     private readonly appUpdate: Update,
-    private readonly pins: PersistentSet<Types.NodeName>
+    private readonly pins: PersistentSet<Types.NodeName>,
+    private readonly disableNodes?: boolean
   ) {
     this.bindSocket();
   }
@@ -150,17 +146,10 @@ export class Connection {
     this.socket.send(`subscribe:${chain}`);
   }
 
-  private handleMessages = (messages: FeedMessage.Message[]) => {
+  private handleMessages = async (messages: FeedMessage.Message[]) => {
     this.messageTimeout?.reset();
-    const { nodes, chains, sortBy, selectedColumns } = this.appState;
+    const { nodes, chains } = this.appState;
     const nodesStateRef = nodes.ref;
-
-    let sortByColumn: Maybe<Column> = null;
-
-    if (sortBy != null) {
-      sortByColumn =
-        sortBy < 0 ? selectedColumns[~sortBy] : selectedColumns[sortBy];
-    }
 
     for (const message of messages) {
       switch (message.action) {
@@ -175,9 +164,13 @@ export class Connection {
         case ACTIONS.BestBlock: {
           const [best, blockTimestamp, blockAverage] = message.payload;
 
-          nodes.mutEach((node) => node.newBestBlock());
+          nodes.mutEachAndSort((node) => node.newBestBlock());
 
-          this.appUpdate({ best, blockTimestamp, blockAverage });
+          this.appUpdate({
+            best,
+            blockTimestamp,
+            blockAverage,
+          });
 
           break;
         }
@@ -191,6 +184,10 @@ export class Connection {
         }
 
         case ACTIONS.AddedNode: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [
             id,
             nodeDetails,
@@ -220,6 +217,10 @@ export class Connection {
         }
 
         case ACTIONS.RemovedNode: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const id = message.payload;
 
           nodes.remove(id);
@@ -228,78 +229,85 @@ export class Connection {
         }
 
         case ACTIONS.StaleNode: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const id = message.payload;
 
-          nodes.mutAndSort(id, (node) => node.setStale(true));
+          nodes.mut(id, (node) => node.setStale(true));
 
           break;
         }
 
         case ACTIONS.LocatedNode: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, lat, lon, city] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateLocation([lat, lon, city]),
-            sortByColumn === LocationColumn
-          );
+          nodes.mut(id, (node) => node.updateLocation([lat, lon, city]));
 
           break;
         }
 
         case ACTIONS.ImportedBlock: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, blockDetails] = message.payload;
 
-          nodes.mutAndSort(id, (node) => node.updateBlock(blockDetails));
+          nodes.mut(id, (node) => node.updateBlock(blockDetails));
 
           break;
         }
 
         case ACTIONS.FinalizedBlock: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, height, hash] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateFinalized(height, hash),
-            sortByColumn === FinalizedBlockColumn ||
-              sortByColumn === FinalizedHashColumn
-          );
+          nodes.mut(id, (node) => node.updateFinalized(height, hash));
 
           break;
         }
 
         case ACTIONS.NodeStats: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, nodeStats] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateStats(nodeStats),
-            sortByColumn === PeersColumn || sortByColumn === TxsColumn
-          );
+          nodes.mut(id, (node) => node.updateStats(nodeStats));
 
           break;
         }
 
         case ACTIONS.NodeHardware: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, nodeHardware] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateHardware(nodeHardware),
-            sortByColumn === UploadColumn || sortByColumn === DownloadColumn
-          );
+          nodes.mut(id, (node) => node.updateHardware(nodeHardware));
 
           break;
         }
 
         case ACTIONS.NodeIO: {
+          if (this.disableNodes) {
+            break;
+          }
+
           const [id, nodeIO] = message.payload;
 
-          nodes.mutAndMaybeSort(
-            id,
-            (node) => node.updateIO(nodeIO),
-            sortByColumn === StateCacheColumn
-          );
+          nodes.mut(id, (node) => node.updateIO(nodeIO));
 
           break;
         }
@@ -469,7 +477,8 @@ export class Connection {
     let data: FeedMessage.Data;
 
     if (typeof event.data === 'string') {
-      data = (event.data as any) as FeedMessage.Data;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data = event.data as any as FeedMessage.Data;
     } else {
       const u8aData = new Uint8Array(event.data);
 
@@ -480,7 +489,8 @@ export class Connection {
 
       const str = Connection.utf8decoder.decode(event.data);
 
-      data = (str as any) as FeedMessage.Data;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data = str as any as FeedMessage.Data;
     }
 
     this.handleMessages(FeedMessage.deserialize(data));

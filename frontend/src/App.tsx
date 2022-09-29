@@ -27,31 +27,35 @@ import {
   Node,
   ChainData,
   comparePinnedChains,
+  StateSettings,
 } from './state';
-import { getHashData } from './utils';
-import stable from 'stable';
+import { getHashData, fetchMetadata } from './utils';
 
 import './App.css';
 
-export default class App extends React.Component<{}, {}> {
+// DISABLE_NODE_LIST env variable is added to window.process_env in scripts/env.sh, it's not available in process.env
+const DISABLE_NODE_LIST = window.process_env['DISABLE_NODE_LIST'] === '1';
+
+export default class App extends React.Component {
   private chainsCache: ChainData[] = [];
   // Custom state for finer control over updates
   private readonly appState: Readonly<State>;
   private readonly appUpdate: Update;
-  private readonly settings: PersistentObject<State.Settings>;
+  private readonly settings: PersistentObject<StateSettings>;
   private readonly pins: PersistentSet<Types.NodeName>;
   private readonly sortBy: Persistent<Maybe<number>>;
   private readonly connection: Promise<Connection>;
 
-  constructor(props: {}) {
+  constructor(props: Record<string, unknown>) {
     super(props);
 
     this.settings = new PersistentObject(
       'settings',
       {
-        validator: true,
+        // These columns are removed since backend is not sending us these data anymore, but we might need them later
+        // validator: false,
+        // implementation: false,
         location: true,
-        implementation: true,
         networkId: false,
         peers: true,
         txs: true,
@@ -83,7 +87,7 @@ export default class App extends React.Component<{}, {}> {
     this.pins = new PersistentSet<Types.NodeName>('pinned_names', (pins) => {
       const { nodes } = this.appState;
 
-      nodes.mutEachAndSort((node) => node.setPinned(pins.has(node.name)));
+      nodes.mutEach((node) => node.setPinned(pins.has(node.name)));
 
       this.appUpdate({ nodes, pins });
     });
@@ -113,6 +117,8 @@ export default class App extends React.Component<{}, {}> {
       selectedColumns: this.selectedColumns(this.settings.raw()),
       tab,
       chainStats: null,
+      spacePledged: 0,
+      uniqueAddressCount: 0,
     });
     this.appState = this.appUpdate({});
 
@@ -122,10 +128,27 @@ export default class App extends React.Component<{}, {}> {
     this.connection = Connection.create(
       this.pins,
       this.appState,
-      this.appUpdate
+      this.appUpdate,
+      DISABLE_NODE_LIST
     );
 
     setInterval(() => (this.chainsCache = []), 10000); // Wipe sorted chains cache every 10 seconds
+  }
+
+  private async updateMetadata() {
+    try {
+      const { uniqueAddressCount, spacePledged } = await fetchMetadata();
+
+      this.appUpdate({
+        spacePledged: parseInt(spacePledged, 10),
+        uniqueAddressCount: parseInt(uniqueAddressCount, 10),
+      });
+    } catch (error) {
+      // if data is missing components are not rendered inside Header.tsx
+      console.error(`Failed to fetch unique address count: ${error}`);
+    }
+
+    setTimeout(async () => await this.updateMetadata(), 10000);
   }
 
   public render() {
@@ -171,15 +194,19 @@ export default class App extends React.Component<{}, {}> {
           settings={this.settings}
           pins={this.pins}
           sortBy={this.sortBy}
+          disableNodeViews={DISABLE_NODE_LIST}
+          subscribedData={subscribedData}
         />
         {overlay}
       </div>
     );
   }
 
-  public componentDidMount() {
+  public async componentDidMount() {
     window.addEventListener('keydown', this.onKeyPress);
     window.addEventListener('hashchange', this.onHashChange);
+
+    await this.updateMetadata();
   }
 
   public componentWillUnmount() {
@@ -225,8 +252,7 @@ export default class App extends React.Component<{}, {}> {
       return this.chainsCache;
     }
 
-    this.chainsCache = stable.inplace(
-      Array.from(this.appState.chains.values()),
+    this.chainsCache = Array.from(this.appState.chains.values()).sort(
       (a, b) => {
         const pinned = comparePinnedChains(a.genesisHash, b.genesisHash);
 
@@ -241,7 +267,7 @@ export default class App extends React.Component<{}, {}> {
     return this.chainsCache;
   }
 
-  private selectedColumns(settings: State.Settings): Column[] {
+  private selectedColumns(settings: StateSettings): Column[] {
     return Row.columns.filter(
       ({ setting }) => setting == null || settings[setting]
     );

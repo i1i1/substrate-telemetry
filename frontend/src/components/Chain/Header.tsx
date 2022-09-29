@@ -17,7 +17,7 @@
 import * as React from 'react';
 import { Types, Maybe } from '../../common';
 import { formatNumber, secondsWithPrecision } from '../../utils';
-import { Tab, Chain } from './';
+import { Tab, ChainDisplay } from './';
 import { Tile, Ago } from '../';
 
 import blockIcon from '../../icons/cube.svg';
@@ -27,35 +27,64 @@ import lastTimeIcon from '../../icons/watch.svg';
 import listIcon from '../../icons/list-alt-regular.svg';
 import worldIcon from '../../icons/location.svg';
 import settingsIcon from '../../icons/settings.svg';
-import consensusIcon from '../../icons/cube-alt.svg';
+import nodesIcon from '../../icons/blockchain-icon.svg';
 import statsIcon from '../../icons/graph.svg';
+import databaseIcon from '../../icons/database.svg';
+import fingerprintIcon from '../../icons/fingerprint.svg';
 
 import './Header.css';
 
-export namespace Header {
-  export interface Props {
-    best: Types.BlockNumber;
-    finalized: Types.BlockNumber;
-    blockTimestamp: Types.Timestamp;
-    blockAverage: Maybe<Types.Milliseconds>;
-    currentTab: Chain.Display;
-    setDisplay: (display: Chain.Display) => void;
-  }
+interface HeaderProps {
+  best: Types.BlockNumber;
+  finalized: Types.BlockNumber;
+  nodeCount: number;
+  blockTimestamp: Types.Timestamp;
+  blockAverage: Maybe<Types.Milliseconds>;
+  currentTab: ChainDisplay;
+  setDisplay: (display: ChainDisplay) => void;
+  hideSettingsNav?: boolean;
+  spacePledged: Maybe<number>;
+  uniqueAddressCount: Maybe<number>;
 }
 
-export class Header extends React.Component<Header.Props, {}> {
-  public shouldComponentUpdate(nextProps: Header.Props) {
+const TB = 1024 * 1024 * 1024 * 1024;
+const GB = 1024 * 1024 * 1024;
+const MB = 1024 * 1024;
+
+export class Header extends React.Component<HeaderProps> {
+  public shouldComponentUpdate(nextProps: HeaderProps) {
     return (
       this.props.best !== nextProps.best ||
       this.props.finalized !== nextProps.finalized ||
       this.props.blockTimestamp !== nextProps.blockTimestamp ||
       this.props.blockAverage !== nextProps.blockAverage ||
-      this.props.currentTab !== nextProps.currentTab
+      this.props.currentTab !== nextProps.currentTab ||
+      this.props.nodeCount !== nextProps.nodeCount ||
+      this.props.spacePledged !== nextProps.spacePledged ||
+      this.props.uniqueAddressCount !== nextProps.uniqueAddressCount
     );
   }
 
+  private formatSpacePledged(value: number) {
+    if (value >= TB) {
+      return `${Math.round((value * 100) / TB) / 100} TB`;
+    } else if (value >= GB) {
+      return `${Math.round((value * 100) / GB) / 100} GB`;
+    } else {
+      return `${Math.round((value * 100) / MB) / 100} MB`;
+    }
+  }
+
   public render() {
-    const { best, finalized, blockTimestamp, blockAverage } = this.props;
+    const {
+      best,
+      finalized,
+      nodeCount,
+      blockTimestamp,
+      blockAverage,
+      spacePledged,
+      uniqueAddressCount,
+    } = this.props;
     const { currentTab, setDisplay } = this.props;
 
     return (
@@ -74,40 +103,55 @@ export class Header extends React.Component<Header.Props, {}> {
         <Tile icon={lastTimeIcon} title="Last Block">
           <Ago when={blockTimestamp} />
         </Tile>
-        <div className="Header-tabs">
-          <Tab
-            icon={listIcon}
-            label="List"
-            display="list"
-            tab=""
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={worldIcon}
-            label="Map"
-            display="map"
-            tab="map"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={statsIcon}
-            label="Stats"
-            display="stats"
-            tab="stats"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-          <Tab
-            icon={settingsIcon}
-            label="Settings"
-            display="settings"
-            tab="settings"
-            current={currentTab}
-            setDisplay={setDisplay}
-          />
-        </div>
+        <Tile icon={nodesIcon} title="Node Count">
+          {formatNumber(nodeCount)}
+        </Tile>
+        {uniqueAddressCount ? (
+          <Tile icon={fingerprintIcon} title="Unique addresses">
+            {formatNumber(uniqueAddressCount)}
+          </Tile>
+        ) : null}
+        {spacePledged ? (
+          <Tile icon={databaseIcon} title="Space Pledged">
+            {this.formatSpacePledged(spacePledged)}
+          </Tile>
+        ) : null}
+        {!this.props.hideSettingsNav && (
+          <div className="Header-tabs">
+            <Tab
+              icon={listIcon}
+              label="List"
+              display="list"
+              tab=""
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={worldIcon}
+              label="Map"
+              display="map"
+              tab="map"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={statsIcon}
+              label="Stats"
+              display="stats"
+              tab="stats"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+            <Tab
+              icon={settingsIcon}
+              label="Settings"
+              display="settings"
+              tab="settings"
+              current={currentTab}
+              setDisplay={setDisplay}
+            />
+          </div>
+        )}
       </div>
     );
   }

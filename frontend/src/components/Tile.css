@@ -17,39 +17,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
 .Tile {
-  font-size: 2.5em;
+  font-size: 2em;
   text-align: left;
-  width: 260px;
-  height: 100px;
   display: inline-block;
   position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .Tile-label {
-  position: absolute;
-  top: 24px;
-  left: 70px;
   right: 0;
   font-size: 0.4em;
   text-transform: uppercase;
 }
 
 .Tile-content {
-  position: absolute;
-  bottom: 16px;
-  left: 70px;
   right: 0;
   font-weight: 300;
   font-size: 0.75em;
 }
 
 .Tile .Icon {
-  position: absolute;
-  left: 20px;
-  top: 15px;
   font-size: 0.8em;
   padding: 0.1em;
   border-radius: 1.25em;
   border: 2px solid #562b8e;
   color: #562b8e;
+  margin-right: 10px;
 }

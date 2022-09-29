@@ -127,3 +127,12 @@ export function getSVGShadowRoot(): SVGSVGElement {
 
   return root;
 }
+
+export async function fetchMetadata() {
+  const url =
+    (window.process_env && window.process_env['SUBSPACE_API_URL']) ||
+    'http://localhost:8080/api';
+  const response = await fetch(url);
+  const json = await response.json();
+  return json;
+}

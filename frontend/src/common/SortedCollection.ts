@@ -109,9 +109,7 @@ export function sortedIndexOf<T>(
   return -1;
 }
 
-export namespace SortedCollection {
-  export type StateRef = Opaque<number, 'SortedCollection.StateRef'>;
-}
+type StateRef = Opaque<number, 'SortedCollection.StateRef'>;
 
 interface Focus {
   start: number;
@@ -159,7 +157,8 @@ export class SortedCollection<Item extends { id: number }> {
 
     this.map[item.id] = item;
 
-    const index = sortedInsert(item, this.list, this.compare);
+    this.list.push(item);
+    const index = this.list.length - 1;
 
     if (index < this.focus.end) {
       this.changeRef += 1;
@@ -173,7 +172,7 @@ export class SortedCollection<Item extends { id: number }> {
       return;
     }
 
-    const index = sortedIndexOf(item, this.list, this.compare);
+    const index = this.list.indexOf(item);
     this.list.splice(index, 1);
     this.map[id] = null;
 
@@ -186,7 +185,7 @@ export class SortedCollection<Item extends { id: number }> {
     return this.map[id];
   }
 
-  public sorted(): Array<Item> {
+  public getList(): Array<Item> {
     return this.list;
   }
 
@@ -197,50 +196,12 @@ export class SortedCollection<Item extends { id: number }> {
       return;
     }
 
-    const index = sortedIndexOf(item, this.list, this.compare);
+    const index = this.list.indexOf(item);
 
     mutator(item);
 
     if (index >= this.focus.start && index < this.focus.end) {
       this.changeRef += 1;
-    }
-  }
-
-  public mutAndSort(id: number, mutator: (item: Item) => void) {
-    const item = this.map[id];
-
-    if (!item) {
-      return;
-    }
-
-    const index = sortedIndexOf(item, this.list, this.compare);
-
-    mutator(item);
-
-    this.list.splice(index, 1);
-
-    const newIndex = sortedInsert(item, this.list, this.compare);
-
-    if (newIndex !== index) {
-      const outOfFocus =
-        (index < this.focus.start && newIndex < this.focus.start) ||
-        (index >= this.focus.end && newIndex >= this.focus.end);
-
-      if (!outOfFocus) {
-        this.changeRef += 1;
-      }
-    }
-  }
-
-  public mutAndMaybeSort(
-    id: number,
-    mutator: (item: Item) => void,
-    sort: boolean
-  ) {
-    if (sort) {
-      this.mutAndSort(id, mutator);
-    } else {
-      this.mut(id, mutator);
     }
   }
 
@@ -268,12 +229,12 @@ export class SortedCollection<Item extends { id: number }> {
   }
 
   // Get the reference to current ordering state of focused items.
-  public get ref(): SortedCollection.StateRef {
-    return this.changeRef as SortedCollection.StateRef;
+  public get ref(): StateRef {
+    return this.changeRef as StateRef;
   }
 
   // Check if order of focused items has changed since obtaining a `ref`.
-  public hasChangedSince(ref: SortedCollection.StateRef): boolean {
+  public hasChangedSince(ref: StateRef): boolean {
     return this.changeRef > ref;
   }
 }

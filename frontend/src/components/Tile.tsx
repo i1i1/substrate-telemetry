@@ -18,20 +18,20 @@ import * as React from 'react';
 import './Tile.css';
 import { Icon } from './Icon';
 
-export namespace Tile {
-  export interface Props {
-    title: string;
-    icon: string;
-    children?: React.ReactNode;
-  }
+interface TileProps {
+  title: string;
+  icon: string;
+  children?: React.ReactNode;
 }
 
-export function Tile(props: Tile.Props) {
+export function Tile(props: TileProps) {
   return (
     <div className="Tile">
       <Icon src={props.icon} />
-      <span className="Tile-label">{props.title}</span>
-      <span className="Tile-content">{props.children}</span>
+      <div>
+        <div className="Tile-label">{props.title}</div>
+        <div className="Tile-content">{props.children}</div>
+      </div>
     </div>
   );
 }

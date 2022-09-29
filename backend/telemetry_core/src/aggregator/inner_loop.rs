@@ -15,16 +15,18 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use super::aggregator::ConnId;
-use crate::feed_message::{self, FeedMessageSerializer};
+use crate::feed_message::{self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter};
 use crate::find_location;
 use crate::state::{self, NodeId, State};
 use bimap::BiMap;
+use common::node_types::Block;
 use common::{
     internal_messages::{self, MuteReason, ShardNodeId},
     node_message,
     node_types::BlockHash,
     time, MultiMapUnique,
 };
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -38,6 +40,7 @@ pub enum ToAggregator {
     FromShardWebsocket(ConnId, FromShardWebsocket),
     FromFeedWebsocket(ConnId, FromFeedWebsocket),
     FromFindLocation(NodeId, find_location::Location),
+    SendUpdates,
     /// Hand back some metrics. The provided sender is expected not to block when
     /// a message is sent into it.
     GatherMetrics(flume::Sender<Metrics>),
@@ -152,7 +155,7 @@ pub enum ToFeedWebsocket {
 
 /// Instances of this are responsible for handling incoming and
 /// outgoing messages in the main aggregator loop.
-pub struct InnerLoop {
+pub struct InnerLoop<L> {
     /// The state of our chains and nodes lives here:
     node_state: State,
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
@@ -168,20 +171,24 @@ pub struct InnerLoop {
     chain_to_feed_conn_ids: MultiMapUnique<BlockHash, ConnId>,
 
     /// Send messages here to make geographical location requests.
-    tx_to_locator: flume::Sender<(NodeId, IpAddr)>,
+    tx_to_locator: L,
 
     /// How big can the queue of messages coming in to the aggregator get before messages
     /// are prioritised and dropped to try and get back on track.
     max_queue_len: usize,
+
+    /// Should we send node data
+    send_node_data: bool,
 }
 
-impl InnerLoop {
+impl<L> InnerLoop<L> {
     /// Create a new inner loop handler with the various state it needs.
     pub fn new(
-        tx_to_locator: flume::Sender<(NodeId, IpAddr)>,
+        tx_to_locator: L,
         denylist: Vec<String>,
         max_queue_len: usize,
         max_third_party_nodes: usize,
+        send_node_data: bool,
     ) -> Self {
         InnerLoop {
             node_state: State::new(denylist, max_third_party_nodes),
@@ -191,11 +198,20 @@ impl InnerLoop {
             chain_to_feed_conn_ids: MultiMapUnique::new(),
             tx_to_locator,
             max_queue_len,
+            send_node_data,
         }
     }
+}
 
+impl<L> InnerLoop<L>
+where
+    L: Sink<(NodeId, IpAddr)> + Send + Unpin + 'static,
+{
     /// Start handling and responding to incoming messages.
-    pub async fn handle(mut self, rx_from_external: flume::Receiver<ToAggregator>) {
+    pub async fn handle<E>(mut self, mut rx_from_external: E)
+    where
+        E: Stream<Item = ToAggregator> + Unpin,
+    {
         let max_queue_len = self.max_queue_len;
         let (metered_tx, metered_rx) = flume::unbounded();
 
@@ -220,6 +236,7 @@ impl InnerLoop {
                     ToAggregator::FromFindLocation(node_id, location) => {
                         self.handle_from_find_location(node_id, location)
                     }
+                    ToAggregator::SendUpdates => self.send_updates(),
                     ToAggregator::GatherMetrics(tx) => self.handle_gather_metrics(
                         tx,
                         metered_rx.len(),
@@ -230,7 +247,7 @@ impl InnerLoop {
             }
         });
 
-        while let Ok(msg) = rx_from_external.recv_async().await {
+        while let Some(msg) = rx_from_external.next().await {
             total_messages.fetch_add(1, Ordering::Relaxed);
 
             // ignore node updates if we have too many messages to handle, in an attempt
@@ -251,6 +268,35 @@ impl InnerLoop {
             if let Err(e) = metered_tx.send(msg) {
                 log::error!("Cannot send message into aggregator: {}", e);
                 break;
+            }
+        }
+    }
+
+    fn send_updates(&mut self) {
+        for chain in self.node_state.iter_chains() {
+            let mut feed = FeedMessageSerializer::new();
+
+            feed.push(feed_message::BestBlock(
+                chain.best_block().height,
+                chain.timestamp(),
+                chain.average_block_time(),
+            ));
+            let Block { hash, height } = *chain.finalized_block();
+            feed.push(feed_message::BestFinalized(height, hash));
+
+            // XXX: it should be just a call to:
+            // self.finalize_and_broadcast_to_chain_feeds(&genesis, feed);
+
+            let msg = feed.into_finalized().map(ToFeedWebsocket::Bytes).unwrap();
+            if let Some(feeds) = self
+                .chain_to_feed_conn_ids
+                .get_values(&chain.genesis_hash())
+            {
+                for &feed_id in feeds {
+                    if let Some(chan) = self.feed_channels.get_mut(&feed_id) {
+                        let _ = chan.send(msg.clone());
+                    }
+                }
             }
         }
     }
@@ -356,10 +402,13 @@ impl InnerLoop {
 
                         // Tell chain subscribers about the node we've just added:
                         let mut feed_messages_for_chain = FeedMessageSerializer::new();
-                        feed_messages_for_chain.push(feed_message::AddedNode(
-                            node_id.get_chain_node_id().into(),
-                            &details.node,
-                        ));
+                        if self.send_node_data {
+                            feed_messages_for_chain.push(feed_message::AddedNode(
+                                node_id.get_chain_node_id().into(),
+                                details.node,
+                            ));
+                        }
+                        // TODO: batch node add updates
                         self.finalize_and_broadcast_to_chain_feeds(
                             &genesis_hash,
                             feed_messages_for_chain,
@@ -376,8 +425,8 @@ impl InnerLoop {
                         ));
                         self.finalize_and_broadcast_to_all_feeds(feed_messages_for_all);
 
-                        // Ask for the grographical location of the node.
-                        let _ = self.tx_to_locator.send((node_id, ip));
+                        // Ask for the geographical location of the node.
+                        let _ = self.tx_to_locator.feed((node_id, ip));
                     }
                 }
             }
@@ -408,16 +457,21 @@ impl InnerLoop {
                     }
                 };
 
-                let mut feed_message_serializer = FeedMessageSerializer::new();
-                self.node_state
-                    .update_node(node_id, payload, &mut feed_message_serializer);
-
-                if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
-                    let genesis_hash = chain.genesis_hash();
-                    self.finalize_and_broadcast_to_chain_feeds(
-                        &genesis_hash,
-                        feed_message_serializer,
-                    );
+                // TODO: untie serialization and updating data
+                if self.send_node_data {
+                    let mut feed_message_serializer = FeedMessageSerializer::new();
+                    self.node_state
+                        .update_node(node_id, payload, &mut feed_message_serializer);
+                    if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
+                        let genesis_hash = chain.genesis_hash();
+                        self.finalize_and_broadcast_to_chain_feeds(
+                            &genesis_hash,
+                            feed_message_serializer,
+                        );
+                    }
+                } else {
+                    self.node_state
+                        .update_node(node_id, payload, &mut DiscardFeedMessages);
                 }
             }
             FromShardWebsocket::Disconnected => {
@@ -513,42 +567,44 @@ impl InnerLoop {
                     let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
                 }
 
-                // If many (eg 10k) nodes are connected, serializing all of their info takes time.
-                // So, parallelise this with Rayon, but we still send out messages for each node in order
-                // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
-                // size is the max number of node info we fit into 1 message; smaller messages allow the UI
-                // to react a little faster and not have to wait for a larger update to come in. A chunk size
-                // of 64 means each message is ~32k.
-                use rayon::prelude::*;
-                let all_feed_messages: Vec<_> = new_chain
-                    .nodes_slice()
-                    .par_iter()
-                    .enumerate()
-                    .chunks(64)
-                    .filter_map(|nodes| {
-                        let mut feed_serializer = FeedMessageSerializer::new();
-                        for (node_id, node) in nodes
-                            .iter()
-                            .filter_map(|&(idx, n)| n.as_ref().map(|n| (idx, n)))
-                        {
-                            feed_serializer.push(feed_message::AddedNode(node_id, node));
-                            feed_serializer.push(feed_message::FinalizedBlock(
-                                node_id,
-                                node.finalized().height,
-                                node.finalized().hash,
-                            ));
-                            if node.stale() {
-                                feed_serializer.push(feed_message::StaleNode(node_id));
+                if self.send_node_data {
+                    // If many (eg 10k) nodes are connected, serializing all of their info takes time.
+                    // So, parallelise this with Rayon, but we still send out messages for each node in order
+                    // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
+                    // size is the max number of node info we fit into 1 message; smaller messages allow the UI
+                    // to react a little faster and not have to wait for a larger update to come in. A chunk size
+                    // of 64 means each message is ~32k.
+                    use rayon::prelude::*;
+                    let all_feed_messages: Vec<_> = new_chain
+                        .nodes_slice()
+                        .par_iter()
+                        .enumerate()
+                        .chunks(64)
+                        .filter_map(|nodes| {
+                            let mut feed_serializer = FeedMessageSerializer::new();
+                            for (node_id, node) in nodes
+                                .iter()
+                                .filter_map(|&(idx, n)| n.as_ref().map(|n| (idx, n)))
+                            {
+                                feed_serializer.push(feed_message::AddedNode(node_id, node));
+                                feed_serializer.push(feed_message::FinalizedBlock(
+                                    node_id,
+                                    node.finalized().height,
+                                    node.finalized().hash,
+                                ));
+                                if node.stale() {
+                                    feed_serializer.push(feed_message::StaleNode(node_id));
+                                }
                             }
-                        }
-                        feed_serializer.into_finalized()
-                    })
-                    .collect();
-                for bytes in all_feed_messages {
-                    let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
+                            feed_serializer.into_finalized()
+                        })
+                        .collect();
+                    for bytes in all_feed_messages {
+                        let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
+                    }
                 }
 
-                // Actually make a note of the new chain subsciption:
+                // Actually make a note of the new chain subscription:
                 let new_genesis_hash = new_chain.genesis_hash();
                 self.chain_to_feed_conn_ids
                     .insert(new_genesis_hash, feed_conn_id);
@@ -578,6 +634,7 @@ impl InnerLoop {
         let mut feed_messages_for_all = FeedMessageSerializer::new();
         for (chain_label, node_ids) in node_ids_per_chain {
             let mut feed_messages_for_chain = FeedMessageSerializer::new();
+            // TODO: Update chain node count only once
             for node_id in node_ids {
                 self.remove_node(
                     node_id,
@@ -627,7 +684,7 @@ impl InnerLoop {
         }
 
         // Assuming the chain hasn't gone away, tell chain subscribers about the node removal
-        if removed_details.chain_node_count != 0 {
+        if removed_details.chain_node_count != 0 && self.send_node_data {
             feed_for_chain.push(feed_message::RemovedNode(
                 node_id.get_chain_node_id().into(),
             ));
