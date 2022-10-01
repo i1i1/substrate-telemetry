@@ -273,32 +273,22 @@ where
     }
 
     fn send_updates(&mut self) {
-        for chain in self.node_state.iter_chains() {
-            let mut feed = FeedMessageSerializer::new();
-
-            feed.push(feed_message::BestBlock(
-                chain.best_block().height,
-                chain.timestamp(),
-                chain.average_block_time(),
-            ));
-            let Block { hash, height } = *chain.finalized_block();
-            feed.push(feed_message::BestFinalized(height, hash));
-
-            // XXX: it should be just a call to:
-            // self.finalize_and_broadcast_to_chain_feeds(&genesis, feed);
-
-            let msg = feed.into_finalized().map(ToFeedWebsocket::Bytes).unwrap();
-            if let Some(feeds) = self
-                .chain_to_feed_conn_ids
-                .get_values(&chain.genesis_hash())
-            {
-                for &feed_id in feeds {
-                    if let Some(chan) = self.feed_channels.get_mut(&feed_id) {
-                        let _ = chan.send(msg.clone());
-                    }
-                }
-            }
-        }
+        self.node_state
+            .iter_chains()
+            .map(|chain| {
+                let mut feed = FeedMessageSerializer::new();
+                feed.push(feed_message::BestBlock(
+                    chain.best_block().height,
+                    chain.timestamp(),
+                    chain.average_block_time(),
+                ));
+                let Block { hash, height } = *chain.finalized_block();
+                feed.push(feed_message::BestFinalized(height, hash));
+                (feed, chain.genesis_hash())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|(feed, genesis)| self.finalize_and_broadcast_to_chain_feeds(&genesis, feed));
     }
 
     /// Gather and return some metrics.
