@@ -39,6 +39,7 @@ tokio-util = { version = "0.6", features = ["compat"] }
 jemallocator = "0.3.2"
 
 [dev-dependencies]
+fdlimit = "0.2"
 shellwords = "1.1.0"
 test_utils = { path = "../test_utils" }
 criterion = { version = "0.3.4", features = ["async", "async_tokio"] }
