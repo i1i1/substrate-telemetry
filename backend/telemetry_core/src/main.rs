@@ -84,7 +84,7 @@ struct Opts {
     max_third_party_nodes: usize,
     /// Send updates periodically (in seconds).
     #[structopt(long, parse(try_from_str = parse_duration))]
-    update_every: Option<Duration>,
+    update_every: Duration,
 }
 
 fn parse_duration(arg: &str) -> Result<Duration, std::num::ParseIntError> {

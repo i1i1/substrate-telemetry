@@ -15,7 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 use super::aggregator::ConnId;
-use crate::feed_message::{self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter};
+use crate::feed_message::{self, FeedMessageSerializer, FeedMessageWriter};
 use crate::find_location;
 use crate::state::{self, NodeId, State};
 use bimap::BiMap;
@@ -176,9 +176,6 @@ pub struct InnerLoop<L> {
     /// How big can the queue of messages coming in to the aggregator get before messages
     /// are prioritised and dropped to try and get back on track.
     max_queue_len: usize,
-
-    /// Should we send node data
-    send_node_data: bool,
 }
 
 impl<L> InnerLoop<L> {
@@ -188,7 +185,6 @@ impl<L> InnerLoop<L> {
         denylist: Vec<String>,
         max_queue_len: usize,
         max_third_party_nodes: usize,
-        send_node_data: bool,
     ) -> Self {
         InnerLoop {
             node_state: State::new(denylist, max_third_party_nodes),
@@ -198,7 +194,6 @@ impl<L> InnerLoop<L> {
             chain_to_feed_conn_ids: MultiMapUnique::new(),
             tx_to_locator,
             max_queue_len,
-            send_node_data,
         }
     }
 }
@@ -392,12 +387,10 @@ where
 
                         // Tell chain subscribers about the node we've just added:
                         let mut feed_messages_for_chain = FeedMessageSerializer::new();
-                        if self.send_node_data {
-                            feed_messages_for_chain.push(feed_message::AddedNode(
-                                node_id.get_chain_node_id().into(),
-                                details.node,
-                            ));
-                        }
+                        feed_messages_for_chain.push(feed_message::AddedNode(
+                            node_id.get_chain_node_id().into(),
+                            details.node,
+                        ));
                         // TODO: batch node add updates
                         self.finalize_and_broadcast_to_chain_feeds(
                             &genesis_hash,
@@ -448,20 +441,15 @@ where
                 };
 
                 // TODO: untie serialization and updating data
-                if self.send_node_data {
-                    let mut feed_message_serializer = FeedMessageSerializer::new();
-                    self.node_state
-                        .update_node(node_id, payload, &mut feed_message_serializer);
-                    if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
-                        let genesis_hash = chain.genesis_hash();
-                        self.finalize_and_broadcast_to_chain_feeds(
-                            &genesis_hash,
-                            feed_message_serializer,
-                        );
-                    }
-                } else {
-                    self.node_state
-                        .update_node(node_id, payload, &mut DiscardFeedMessages);
+                let mut feed_message_serializer = FeedMessageSerializer::new();
+                self.node_state
+                    .update_node(node_id, payload, &mut feed_message_serializer);
+                if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
+                    let genesis_hash = chain.genesis_hash();
+                    self.finalize_and_broadcast_to_chain_feeds(
+                        &genesis_hash,
+                        feed_message_serializer,
+                    );
                 }
             }
             FromShardWebsocket::Disconnected => {
@@ -557,41 +545,39 @@ where
                     let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
                 }
 
-                if self.send_node_data {
-                    // If many (eg 10k) nodes are connected, serializing all of their info takes time.
-                    // So, parallelise this with Rayon, but we still send out messages for each node in order
-                    // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
-                    // size is the max number of node info we fit into 1 message; smaller messages allow the UI
-                    // to react a little faster and not have to wait for a larger update to come in. A chunk size
-                    // of 64 means each message is ~32k.
-                    use rayon::prelude::*;
-                    let all_feed_messages: Vec<_> = new_chain
-                        .nodes_slice()
-                        .par_iter()
-                        .enumerate()
-                        .chunks(64)
-                        .filter_map(|nodes| {
-                            let mut feed_serializer = FeedMessageSerializer::new();
-                            for (node_id, node) in nodes
-                                .iter()
-                                .filter_map(|&(idx, n)| n.as_ref().map(|n| (idx, n)))
-                            {
-                                feed_serializer.push(feed_message::AddedNode(node_id, node));
-                                feed_serializer.push(feed_message::FinalizedBlock(
-                                    node_id,
-                                    node.finalized().height,
-                                    node.finalized().hash,
-                                ));
-                                if node.stale() {
-                                    feed_serializer.push(feed_message::StaleNode(node_id));
-                                }
+                // If many (eg 10k) nodes are connected, serializing all of their info takes time.
+                // So, parallelise this with Rayon, but we still send out messages for each node in order
+                // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
+                // size is the max number of node info we fit into 1 message; smaller messages allow the UI
+                // to react a little faster and not have to wait for a larger update to come in. A chunk size
+                // of 64 means each message is ~32k.
+                use rayon::prelude::*;
+                let all_feed_messages: Vec<_> = new_chain
+                    .nodes_slice()
+                    .par_iter()
+                    .enumerate()
+                    .chunks(64)
+                    .filter_map(|nodes| {
+                        let mut feed_serializer = FeedMessageSerializer::new();
+                        for (node_id, node) in nodes
+                            .iter()
+                            .filter_map(|&(idx, n)| n.as_ref().map(|n| (idx, n)))
+                        {
+                            feed_serializer.push(feed_message::AddedNode(node_id, node));
+                            feed_serializer.push(feed_message::FinalizedBlock(
+                                node_id,
+                                node.finalized().height,
+                                node.finalized().hash,
+                            ));
+                            if node.stale() {
+                                feed_serializer.push(feed_message::StaleNode(node_id));
                             }
-                            feed_serializer.into_finalized()
-                        })
-                        .collect();
-                    for bytes in all_feed_messages {
-                        let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
-                    }
+                        }
+                        feed_serializer.into_finalized()
+                    })
+                    .collect();
+                for bytes in all_feed_messages {
+                    let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
                 }
 
                 // Actually make a note of the new chain subscription:
@@ -674,7 +660,7 @@ where
         }
 
         // Assuming the chain hasn't gone away, tell chain subscribers about the node removal
-        if removed_details.chain_node_count != 0 && self.send_node_data {
+        if removed_details.chain_node_count != 0 {
             feed_for_chain.push(feed_message::RemovedNode(
                 node_id.get_chain_node_id().into(),
             ));

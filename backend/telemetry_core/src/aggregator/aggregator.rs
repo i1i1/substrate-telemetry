@@ -46,7 +46,7 @@ pub struct AggregatorOpts {
     /// before we prevent connections from them.
     pub max_third_party_nodes: usize,
     /// Send updates periodically
-    pub update_every: Option<Duration>,
+    pub update_every: Duration,
 }
 
 struct AggregatorInternal {
@@ -74,53 +74,35 @@ impl Aggregator {
     ) -> anyhow::Result<Aggregator> {
         let (tx_to_aggregator, rx_from_external) = flume::unbounded();
 
-        match update_every {
-            None => {
-                // Kick off a locator task to locate nodes, which hands back a channel to make location requests
-                let tx_to_locator =
-                    find_location(tx_to_aggregator.clone().into_sink().with(|(node_id, msg)| {
-                        future::ok::<_, flume::SendError<_>>(
-                            inner_loop::ToAggregator::FromFindLocation(node_id, msg),
-                        )
-                    }));
+        // Kick off a locator task to locate nodes, which hands back a channel to make location requests
+        let tx_to_locator =
+            find_location(tx_to_aggregator.clone().into_sink().with(|(node_id, msg)| {
+                future::ok::<_, flume::SendError<_>>(inner_loop::ToAggregator::FromFindLocation(
+                    node_id, msg,
+                ))
+            }));
 
-                // Handle any incoming messages in our handler loop:
-                tokio::spawn(Aggregator::handle_messages(
-                    rx_from_external,
-                    tx_to_locator.into_sink(),
-                    max_queue_len,
-                    denylist,
-                    max_third_party_nodes,
-                    true,
-                ));
-            }
-            Some(update_every) => {
-                tokio::task::spawn({
-                    let tx_to_aggregator = tx_to_aggregator.clone();
-                    let mut timer = tokio::time::interval(update_every);
-                    // First tick is instant
+        tokio::task::spawn({
+            let tx_to_aggregator = tx_to_aggregator.clone();
+            let mut timer = tokio::time::interval(update_every);
+            // First tick is instant
+            timer.tick().await;
+
+            async move {
+                while let Ok(()) = tx_to_aggregator.send(inner_loop::ToAggregator::SendUpdates) {
                     timer.tick().await;
-
-                    async move {
-                        while let Ok(()) =
-                            tx_to_aggregator.send(inner_loop::ToAggregator::SendUpdates)
-                        {
-                            timer.tick().await;
-                        }
-                    }
-                });
-
-                // Handle any incoming messages in our handler loop:
-                tokio::spawn(Aggregator::handle_messages(
-                    rx_from_external,
-                    futures::sink::drain(),
-                    max_queue_len,
-                    denylist,
-                    max_third_party_nodes,
-                    false,
-                ));
+                }
             }
-        }
+        });
+
+        // Handle any incoming messages in our handler loop:
+        tokio::spawn(Aggregator::handle_messages(
+            rx_from_external,
+            tx_to_locator.into_sink(),
+            max_queue_len,
+            denylist,
+            max_third_party_nodes,
+        ));
 
         // Return a handle to our aggregator:
         Ok(Aggregator(Arc::new(AggregatorInternal {
@@ -139,7 +121,6 @@ impl Aggregator {
         max_queue_len: usize,
         denylist: Vec<String>,
         max_third_party_nodes: usize,
-        send_node_data: bool,
     ) where
         A: Sink<(NodeId, IpAddr)> + Send + Unpin + 'static,
     {
@@ -148,7 +129,6 @@ impl Aggregator {
             denylist,
             max_queue_len,
             max_third_party_nodes,
-            send_node_data,
         )
         .handle(rx_from_external.into_stream())
         .await;
