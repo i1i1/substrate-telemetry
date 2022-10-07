@@ -1,7 +1,8 @@
-use super::{state::State as OrdinaryState, AddNodeResult, NodeAddedToChain, NodeId};
+use super::{state::State as OrdinaryState, AddNodeResult, NodeAddedToChain, NodeId, RemovedNode};
 use crate::{
     aggregator::ConnId,
     feed_message::{self, FeedMessageSerializer, FeedMessageWriter},
+    find_location::Location,
 };
 use bimap::BiMap;
 use common::{
@@ -57,6 +58,10 @@ impl State {
                 chain_label,
                 ..
             } = chain_updates;
+            if *node_count == 0 {
+                feed.push(feed_message::RemovedChain(*genesis_hash));
+                continue;
+            }
 
             if *has_chain_label_changed {
                 feed.push(feed_message::RemovedChain(*genesis_hash));
@@ -79,6 +84,7 @@ impl State {
         self.prev.clone_from(&self.next);
         self.chains
             .iter_mut()
+            .filter(|(_, updates)| updates.node_count != 0)
             .map(|(genesis_hash, updates)| (*genesis_hash, std::mem::take(&mut updates.feed)))
     }
 
@@ -140,6 +146,71 @@ impl State {
         if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
             let updates = self.chains.entry(chain.genesis_hash()).or_default();
             self.next.update_node(node_id, payload, &mut updates.feed);
+        }
+    }
+
+    pub fn remove_node(&mut self, shard_conn_id: ConnId, local_id: ShardNodeId) {
+        let node_id = match self.node_ids.remove_by_right(&(shard_conn_id, local_id)) {
+            Some((node_id, _)) => node_id,
+            None => {
+                log::error!(
+                    "Cannot find ID for node with shard/connectionId of {:?}/{:?}",
+                    shard_conn_id,
+                    local_id
+                );
+                return;
+            }
+        };
+
+        self.remove_nodes(Some(node_id));
+    }
+
+    pub fn disconnect_node(&mut self, shard_conn_id: ConnId) {
+        let node_ids_to_remove: Vec<NodeId> = self
+            .node_ids
+            .iter()
+            .filter(|(_, &(this_shard_conn_id, _))| shard_conn_id == this_shard_conn_id)
+            .map(|(&node_id, _)| node_id)
+            .collect();
+        self.remove_nodes(node_ids_to_remove);
+    }
+
+    fn remove_nodes(&mut self, node_ids: impl IntoIterator<Item = NodeId>) {
+        // Group by chain to simplify the handling of feed messages:
+        let mut node_ids_per_chain = HashMap::<BlockHash, Vec<NodeId>>::new();
+        for node_id in node_ids.into_iter() {
+            if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
+                node_ids_per_chain
+                    .entry(chain.genesis_hash())
+                    .or_default()
+                    .push(node_id);
+            }
+        }
+
+        for (chain_label, node_ids) in node_ids_per_chain {
+            let updates = self.chains.entry(chain_label).or_default();
+
+            for node_id in node_ids {
+                self.node_ids.remove_by_left(&node_id);
+
+                let RemovedNode {
+                    chain_node_count,
+                    new_chain_label,
+                    ..
+                } = match self.next.remove_node(node_id) {
+                    Some(details) => details,
+                    None => {
+                        log::error!("Could not find node {node_id:?}");
+                        continue;
+                    }
+                };
+
+                updates.chain_label = new_chain_label.clone();
+                updates.node_count = chain_node_count;
+                updates.feed.push(feed_message::RemovedNode(
+                    node_id.get_chain_node_id().into(),
+                ));
+            }
         }
     }
 }

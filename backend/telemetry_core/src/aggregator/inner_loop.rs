@@ -383,38 +383,15 @@ where
                     let _ = self.tx_to_locator.feed((node_id, ip));
                 }
             },
-
             FromShardWebsocket::Remove { local_id } => {
-                let node_id = match self.node_ids.remove_by_right(&(shard_conn_id, local_id)) {
-                    Some((node_id, _)) => node_id,
-                    None => {
-                        log::error!(
-                            "Cannot find ID for node with shard/connectionId of {:?}/{:?}",
-                            shard_conn_id,
-                            local_id
-                        );
-                        return;
-                    }
-                };
-                self.remove_nodes_and_broadcast_result(Some(node_id));
+                self.batched_node_state.remove_node(shard_conn_id, local_id)
             }
             FromShardWebsocket::Update { local_id, payload } => self
                 .batched_node_state
                 .update_node(shard_conn_id, local_id, payload),
 
             FromShardWebsocket::Disconnected => {
-                self.shard_channels.remove(&shard_conn_id);
-
-                // Find all nodes associated with this shard connection ID:
-                let node_ids_to_remove: Vec<NodeId> = self
-                    .node_ids
-                    .iter()
-                    .filter(|(_, &(this_shard_conn_id, _))| shard_conn_id == this_shard_conn_id)
-                    .map(|(&node_id, _)| node_id)
-                    .collect();
-
-                // ... and remove them:
-                self.remove_nodes_and_broadcast_result(node_ids_to_remove);
+                self.batched_node_state.disconnect_node(shard_conn_id)
             }
         }
     }
@@ -540,80 +517,6 @@ where
                 self.chain_to_feed_conn_ids.remove_value(&feed_conn_id);
                 self.feed_channels.remove(&feed_conn_id);
             }
-        }
-    }
-
-    /// Remove all of the node IDs provided and broadcast messages to feeds as needed.
-    fn remove_nodes_and_broadcast_result(&mut self, node_ids: impl IntoIterator<Item = NodeId>) {
-        // Group by chain to simplify the handling of feed messages:
-        let mut node_ids_per_chain: HashMap<BlockHash, Vec<NodeId>> = HashMap::new();
-        for node_id in node_ids.into_iter() {
-            if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
-                node_ids_per_chain
-                    .entry(chain.genesis_hash())
-                    .or_default()
-                    .push(node_id);
-            }
-        }
-
-        // Remove the nodes for each chain
-        let mut feed_messages_for_all = FeedMessageSerializer::new();
-        for (chain_label, node_ids) in node_ids_per_chain {
-            let mut feed_messages_for_chain = FeedMessageSerializer::new();
-            // TODO: Update chain node count only once
-            for node_id in node_ids {
-                self.remove_node(
-                    node_id,
-                    &mut feed_messages_for_chain,
-                    &mut feed_messages_for_all,
-                );
-            }
-            self.finalize_and_broadcast_to_chain_feeds(&chain_label, feed_messages_for_chain);
-        }
-        self.finalize_and_broadcast_to_all_feeds(feed_messages_for_all);
-    }
-
-    /// Remove a single node by its ID, pushing any messages we'd want to send
-    /// out to feeds onto the provided feed serializers. Doesn't actually send
-    /// anything to the feeds; just updates state as needed.
-    fn remove_node(
-        &mut self,
-        node_id: NodeId,
-        feed_for_chain: &mut FeedMessageSerializer,
-        feed_for_all: &mut FeedMessageSerializer,
-    ) {
-        // Remove our top level association (this may already have been done).
-        self.node_ids.remove_by_left(&node_id);
-
-        let removed_details = match self.node_state.remove_node(node_id) {
-            Some(remove_details) => remove_details,
-            None => {
-                log::error!("Could not find node {:?}", node_id);
-                return;
-            }
-        };
-
-        // The chain has been removed (no nodes left in it, or it was renamed):
-        if removed_details.chain_node_count == 0 || removed_details.has_chain_label_changed {
-            feed_for_all.push(feed_message::RemovedChain(
-                removed_details.chain_genesis_hash,
-            ));
-        }
-
-        // If the chain still exists, tell everybody about the new label or updated node count:
-        if removed_details.chain_node_count != 0 {
-            feed_for_all.push(feed_message::AddedChain(
-                &removed_details.new_chain_label,
-                removed_details.chain_genesis_hash,
-                removed_details.chain_node_count,
-            ));
-        }
-
-        // Assuming the chain hasn't gone away, tell chain subscribers about the node removal
-        if removed_details.chain_node_count != 0 {
-            feed_for_chain.push(feed_message::RemovedNode(
-                node_id.get_chain_node_id().into(),
-            ));
         }
     }
 
