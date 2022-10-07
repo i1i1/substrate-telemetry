@@ -1,4 +1,7 @@
-use super::{state::State as OrdinaryState, AddNodeResult, NodeAddedToChain, NodeId, RemovedNode};
+use super::{
+    state::{State as OrdinaryState, StateChain},
+    AddNodeResult, NodeAddedToChain, NodeId, RemovedNode,
+};
 use crate::{
     aggregator::ConnId,
     feed_message::{self, FeedMessageSerializer, FeedMessageWriter},
@@ -39,6 +42,13 @@ pub struct State {
 }
 
 impl State {
+    delegate::delegate! {
+        to self.prev {
+            pub fn iter_chains(&self) -> impl Iterator<Item = StateChain<'_>>;
+            pub fn get_chain_by_genesis_hash(&self, genesis_hash: &BlockHash) -> Option<StateChain<'_>>;
+        }
+    }
+
     pub fn new(denylist: impl IntoIterator<Item = String>, max_third_party_nodes: usize) -> Self {
         Self {
             prev: OrdinaryState::new([], max_third_party_nodes),

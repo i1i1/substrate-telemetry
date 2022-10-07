@@ -17,9 +17,8 @@
 use super::aggregator::ConnId;
 use crate::feed_message::{self, FeedMessageSerializer, FeedMessageWriter};
 use crate::find_location;
-use crate::state::{BatchedState, NodeId, State};
+use crate::state::{BatchedState, NodeId};
 use bimap::BiMap;
-use common::node_types::Block;
 use common::{
     internal_messages::{self, ShardNodeId},
     node_message,
@@ -158,8 +157,6 @@ pub enum ToFeedWebsocket {
 pub struct InnerLoop<L> {
     /// The batched state of our chains and nodes lives here:
     batched_node_state: BatchedState,
-    /// The state of our chains and nodes lives here:
-    node_state: State,
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
     /// which messages are about which nodes.
     node_ids: BiMap<NodeId, (ConnId, ShardNodeId)>,
@@ -190,7 +187,6 @@ impl<L> InnerLoop<L> {
     ) -> Self {
         InnerLoop {
             batched_node_state: BatchedState::new(denylist.iter().cloned(), max_third_party_nodes),
-            node_state: State::new(denylist, max_third_party_nodes),
             node_ids: BiMap::new(),
             feed_channels: HashMap::new(),
             shard_channels: HashMap::new(),
@@ -271,23 +267,6 @@ where
     }
 
     fn send_updates(&mut self) {
-        self.node_state
-            .iter_chains()
-            .map(|chain| {
-                let mut feed = FeedMessageSerializer::new();
-                feed.push(feed_message::BestBlock(
-                    chain.best_block().height,
-                    chain.timestamp(),
-                    chain.average_block_time(),
-                ));
-                let Block { hash, height } = *chain.finalized_block();
-                feed.push(feed_message::BestFinalized(height, hash));
-                (feed, chain.genesis_hash())
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .for_each(|(feed, genesis)| self.finalize_and_broadcast_to_chain_feeds(&genesis, feed));
-
         for (genesis_hash, feed) in self
             .batched_node_state
             .drain_chain_updates()
@@ -377,7 +356,7 @@ where
                 // Tell the new feed subscription some basic things to get it going:
                 let mut feed_serializer = FeedMessageSerializer::new();
                 feed_serializer.push(feed_message::Version(32));
-                for chain in self.node_state.iter_chains() {
+                for chain in self.batched_node_state.iter_chains() {
                     feed_serializer.push(feed_message::AddedChain(
                         chain.label(),
                         chain.genesis_hash(),
@@ -413,12 +392,12 @@ where
                 let old_genesis_hash = self.chain_to_feed_conn_ids.remove_value(&feed_conn_id);
 
                 // Get old chain if there was one:
-                let node_state = &self.node_state;
+                let node_state = &self.batched_node_state;
                 let old_chain =
                     old_genesis_hash.and_then(|hash| node_state.get_chain_by_genesis_hash(&hash));
 
                 // Get new chain, ignoring the rest if it doesn't exist.
-                let new_chain = match self.node_state.get_chain_by_genesis_hash(&chain) {
+                let new_chain = match self.batched_node_state.get_chain_by_genesis_hash(&chain) {
                     Some(chain) => chain,
                     None => return,
                 };
