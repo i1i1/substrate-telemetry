@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     aggregator::{ConnId, ToFeedWebsocket},
-    feed_message::{self, FeedMessageSerializer, FeedMessageWriter},
+    feed_message::{self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter},
     find_location::Location,
 };
 use bimap::BiMap;
@@ -45,6 +45,7 @@ pub struct State {
     chain_nodes: HashMap<BlockHash, Vec<ToFeedWebsocket>>,
     /// Removed chains tracker
     removed_chains: HashSet<BlockHash>,
+    send_node_data: bool,
 }
 
 impl State {
@@ -55,7 +56,11 @@ impl State {
         }
     }
 
-    pub fn new(denylist: impl IntoIterator<Item = String>, max_third_party_nodes: usize) -> Self {
+    pub fn new(
+        denylist: impl IntoIterator<Item = String>,
+        max_third_party_nodes: usize,
+        send_node_data: bool,
+    ) -> Self {
         Self {
             prev: OrdinaryState::new([], max_third_party_nodes),
             next: OrdinaryState::new(denylist, max_third_party_nodes),
@@ -63,6 +68,7 @@ impl State {
             node_ids: BiMap::new(),
             chain_nodes: HashMap::new(),
             removed_chains: HashSet::new(),
+            send_node_data,
         }
     }
 
@@ -131,11 +137,13 @@ impl State {
 
         let updates = self.chains.entry(genesis_hash).or_default();
 
-        // Tell chain subscribers about the node we've just added:
-        updates.feed.push(feed_message::AddedNode(
-            node_id.get_chain_node_id().into(),
-            node,
-        ));
+        if self.send_node_data {
+            // Tell chain subscribers about the node we've just added:
+            updates.feed.push(feed_message::AddedNode(
+                node_id.get_chain_node_id().into(),
+                node,
+            ));
+        }
 
         updates.has_chain_label_changed = has_chain_label_changed;
         updates.node_count = chain_node_count;
@@ -162,8 +170,13 @@ impl State {
             }
         };
         if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
-            let updates = self.chains.entry(chain.genesis_hash()).or_default();
-            self.next.update_node(node_id, payload, &mut updates.feed);
+            if self.send_node_data {
+                let updates = self.chains.entry(chain.genesis_hash()).or_default();
+                self.next.update_node(node_id, payload, &mut updates.feed);
+            } else {
+                self.next
+                    .update_node(node_id, payload, &mut DiscardFeedMessages);
+            }
         }
     }
 
@@ -235,9 +248,11 @@ impl State {
 
                 updates.chain_label = new_chain_label.clone();
                 updates.node_count = chain_node_count;
-                updates.feed.push(feed_message::RemovedNode(
-                    node_id.get_chain_node_id().into(),
-                ));
+                if self.send_node_data {
+                    updates.feed.push(feed_message::RemovedNode(
+                        node_id.get_chain_node_id().into(),
+                    ));
+                }
             }
         }
     }
@@ -245,24 +260,30 @@ impl State {
     pub fn update_node_location(&mut self, node_id: NodeId, location: Location) {
         self.next.update_node_location(node_id, location.clone());
 
-        if let Some(loc) = location {
-            if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
-                self.chains
-                    .entry(chain.genesis_hash())
-                    .or_default()
-                    .feed
-                    .push(feed_message::LocatedNode(
-                        node_id.get_chain_node_id().into(),
-                        loc.latitude,
-                        loc.longitude,
-                        &loc.city,
-                    ));
+        if self.send_node_data {
+            if let Some(loc) = location {
+                if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
+                    self.chains
+                        .entry(chain.genesis_hash())
+                        .or_default()
+                        .feed
+                        .push(feed_message::LocatedNode(
+                            node_id.get_chain_node_id().into(),
+                            loc.latitude,
+                            loc.longitude,
+                            &loc.city,
+                        ));
+                }
             }
         }
     }
 
     pub fn update_added_nodes_messages(&mut self) {
         use rayon::prelude::*;
+
+        if !self.send_node_data {
+            return;
+        }
 
         self.chain_nodes.clear();
 

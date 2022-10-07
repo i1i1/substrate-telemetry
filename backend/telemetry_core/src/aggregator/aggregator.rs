@@ -47,6 +47,8 @@ pub struct AggregatorOpts {
     pub max_third_party_nodes: usize,
     /// Send updates periodically
     pub update_every: Duration,
+    /// Should we send node data?
+    pub send_node_data: bool,
 }
 
 struct AggregatorInternal {
@@ -70,6 +72,7 @@ impl Aggregator {
             max_queue_len,
             max_third_party_nodes,
             update_every,
+            send_node_data,
         }: AggregatorOpts,
     ) -> anyhow::Result<Aggregator> {
         let (tx_to_aggregator, rx_from_external) = flume::unbounded();
@@ -102,6 +105,7 @@ impl Aggregator {
             max_queue_len,
             denylist,
             max_third_party_nodes,
+            send_node_data,
         ));
 
         // Return a handle to our aggregator:
@@ -121,6 +125,7 @@ impl Aggregator {
         max_queue_len: usize,
         denylist: Vec<String>,
         max_third_party_nodes: usize,
+        send_node_data: bool,
     ) where
         A: Sink<(NodeId, IpAddr)> + Send + Unpin + 'static,
     {
@@ -129,6 +134,7 @@ impl Aggregator {
             denylist,
             max_queue_len,
             max_third_party_nodes,
+            send_node_data,
         )
         .handle(rx_from_external.into_stream())
         .await;

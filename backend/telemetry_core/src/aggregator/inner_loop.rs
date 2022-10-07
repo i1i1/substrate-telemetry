@@ -184,9 +184,10 @@ impl<L> InnerLoop<L> {
         denylist: Vec<String>,
         max_queue_len: usize,
         max_third_party_nodes: usize,
+        send_node_data: bool,
     ) -> Self {
         InnerLoop {
-            node_state: BatchedState::new(denylist, max_third_party_nodes),
+            node_state: BatchedState::new(denylist, max_third_party_nodes, send_node_data),
             node_ids: BiMap::new(),
             feed_channels: HashMap::new(),
             shard_channels: HashMap::new(),
