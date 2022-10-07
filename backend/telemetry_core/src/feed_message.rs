@@ -68,6 +68,12 @@ pub struct FeedMessageSerializer {
     buffer: Vec<u8>,
 }
 
+impl Default for FeedMessageSerializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const BUFCAP: usize = 128;
 
 impl FeedMessageSerializer {

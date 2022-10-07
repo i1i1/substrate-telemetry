@@ -17,7 +17,7 @@
 use super::aggregator::ConnId;
 use crate::feed_message::{self, FeedMessageSerializer, FeedMessageWriter};
 use crate::find_location;
-use crate::state::{self, NodeId, State};
+use crate::state::{self, BatchedState, NodeId, State};
 use bimap::BiMap;
 use common::node_types::Block;
 use common::{
@@ -156,6 +156,8 @@ pub enum ToFeedWebsocket {
 /// Instances of this are responsible for handling incoming and
 /// outgoing messages in the main aggregator loop.
 pub struct InnerLoop<L> {
+    /// The batched state of our chains and nodes lives here:
+    batched_node_state: BatchedState,
     /// The state of our chains and nodes lives here:
     node_state: State,
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
@@ -187,6 +189,7 @@ impl<L> InnerLoop<L> {
         max_third_party_nodes: usize,
     ) -> Self {
         InnerLoop {
+            batched_node_state: BatchedState::new(denylist.iter().cloned(), max_third_party_nodes),
             node_state: State::new(denylist, max_third_party_nodes),
             node_ids: BiMap::new(),
             feed_channels: HashMap::new(),
