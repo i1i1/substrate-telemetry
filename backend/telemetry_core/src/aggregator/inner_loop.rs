@@ -272,6 +272,8 @@ where
         }
         let feed_for_all = self.node_state.drain_updates_for_all_feeds();
         self.finalize_and_broadcast_to_all_feeds(feed_for_all);
+
+        self.node_state.update_added_nodes_messages();
     }
 
     /// Gather and return some metrics.
@@ -418,6 +420,13 @@ where
                     let _ = feed_channel.send(ToFeedWebsocket::Bytes(bytes));
                 }
 
+                let new_genesis_hash = new_chain.genesis_hash();
+                if let Some(encoded_nodes) = self.node_state.added_nodes_messages(&new_genesis_hash)
+                {
+                    for msg in encoded_nodes {
+                        let _ = feed_channel.send(msg.clone());
+                    }
+                }
                 // If many (eg 10k) nodes are connected, serializing all of their info takes time.
                 // So, parallelise this with Rayon, but we still send out messages for each node in order
                 // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
@@ -454,7 +463,6 @@ where
                 }
 
                 // Actually make a note of the new chain subscription:
-                let new_genesis_hash = new_chain.genesis_hash();
                 self.chain_to_feed_conn_ids
                     .insert(new_genesis_hash, feed_conn_id);
             }

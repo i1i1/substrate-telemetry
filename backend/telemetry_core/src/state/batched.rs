@@ -3,7 +3,7 @@ use super::{
     AddNodeResult, NodeAddedToChain, NodeId, RemovedNode,
 };
 use crate::{
-    aggregator::ConnId,
+    aggregator::{ConnId, ToFeedWebsocket},
     feed_message::{self, FeedMessageSerializer, FeedMessageWriter},
     find_location::Location,
 };
@@ -39,6 +39,11 @@ pub struct State {
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
     /// which messages are about which nodes.
     node_ids: BiMap<NodeId, (ConnId, ShardNodeId)>,
+
+    /// Encoded node messages. (Usually send during node initialization)
+    ///
+    /// Basically `prev` state encoded.
+    chain_nodes: HashMap<BlockHash, Vec<ToFeedWebsocket>>,
 }
 
 impl State {
@@ -55,6 +60,7 @@ impl State {
             next: OrdinaryState::new(denylist, max_third_party_nodes),
             chains: HashMap::new(),
             node_ids: BiMap::new(),
+            chain_nodes: HashMap::new(),
         }
     }
 
@@ -241,5 +247,52 @@ impl State {
                     ));
             }
         }
+    }
+
+    pub fn update_added_nodes_messages(&mut self) {
+        use rayon::prelude::*;
+
+        self.chain_nodes.clear();
+
+        // If many (eg 10k) nodes are connected, serializing all of their info takes time.
+        // So, parallelise this with Rayon, but we still send out messages for each node in order
+        // (which is helpful for the UI as it tries to maintain a sorted list of nodes). The chunk
+        // size is the max number of node info we fit into 1 message; smaller messages allow the UI
+        // to react a little faster and not have to wait for a larger update to come in. A chunk size
+        // of 64 means each message is ~32k.
+        for chain in self.prev.iter_chains() {
+            let all_feed_messages: Vec<_> = chain
+                .nodes_slice()
+                .par_iter()
+                .enumerate()
+                .chunks(64)
+                .filter_map(|nodes| {
+                    let mut feed_serializer = FeedMessageSerializer::new();
+                    for (node_id, node) in nodes
+                        .iter()
+                        .filter_map(|&(idx, n)| n.as_ref().map(|n| (idx, n)))
+                    {
+                        feed_serializer.push(feed_message::AddedNode(node_id, node));
+                        feed_serializer.push(feed_message::FinalizedBlock(
+                            node_id,
+                            node.finalized().height,
+                            node.finalized().hash,
+                        ));
+                        if node.stale() {
+                            feed_serializer.push(feed_message::StaleNode(node_id));
+                        }
+                    }
+                    feed_serializer.into_finalized()
+                })
+                .map(ToFeedWebsocket::Bytes)
+                .collect();
+
+            self.chain_nodes
+                .insert(chain.genesis_hash(), all_feed_messages);
+        }
+    }
+
+    pub fn added_nodes_messages(&self, genesis_hash: &BlockHash) -> Option<&[ToFeedWebsocket]> {
+        self.chain_nodes.get(genesis_hash).map(AsRef::as_ref)
     }
 }
