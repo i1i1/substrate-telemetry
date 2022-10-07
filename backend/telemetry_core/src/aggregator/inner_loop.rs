@@ -398,31 +398,10 @@ where
                 };
                 self.remove_nodes_and_broadcast_result(Some(node_id));
             }
-            FromShardWebsocket::Update { local_id, payload } => {
-                let node_id = match self.node_ids.get_by_right(&(shard_conn_id, local_id)) {
-                    Some(id) => *id,
-                    None => {
-                        log::error!(
-                            "Cannot find ID for node with shard/connectionId of {:?}/{:?}",
-                            shard_conn_id,
-                            local_id
-                        );
-                        return;
-                    }
-                };
+            FromShardWebsocket::Update { local_id, payload } => self
+                .batched_node_state
+                .update_node(shard_conn_id, local_id, payload),
 
-                // TODO: untie serialization and updating data
-                let mut feed_message_serializer = FeedMessageSerializer::new();
-                self.node_state
-                    .update_node(node_id, payload, &mut feed_message_serializer);
-                if let Some(chain) = self.node_state.get_chain_by_node_id(node_id) {
-                    let genesis_hash = chain.genesis_hash();
-                    self.finalize_and_broadcast_to_chain_feeds(
-                        &genesis_hash,
-                        feed_message_serializer,
-                    );
-                }
-            }
             FromShardWebsocket::Disconnected => {
                 self.shard_channels.remove(&shard_conn_id);
 

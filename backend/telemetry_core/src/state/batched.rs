@@ -6,6 +6,7 @@ use crate::{
 use bimap::BiMap;
 use common::{
     internal_messages::{MuteReason, ShardNodeId},
+    node_message,
     node_types::{BlockHash, NodeDetails},
 };
 use std::collections::HashMap;
@@ -117,5 +118,28 @@ impl State {
         updates.chain_label = new_chain_label.to_owned().into_boxed_str();
 
         Ok(node_id)
+    }
+
+    pub fn update_node(
+        &mut self,
+        shard_conn_id: ConnId,
+        local_id: ShardNodeId,
+        payload: node_message::Payload,
+    ) {
+        let node_id = match self.node_ids.get_by_right(&(shard_conn_id, local_id)) {
+            Some(id) => *id,
+            None => {
+                log::error!(
+                    "Cannot find ID for node with shard/connectionId of {:?}/{:?}",
+                    shard_conn_id,
+                    local_id
+                );
+                return;
+            }
+        };
+        if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
+            let updates = self.chains.entry(chain.genesis_hash()).or_default();
+            self.next.update_node(node_id, payload, &mut updates.feed);
+        }
     }
 }
