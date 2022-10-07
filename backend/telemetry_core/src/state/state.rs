@@ -41,7 +41,8 @@ impl NodeId {
     }
 }
 
-/// Our state constains node and chain information
+/// Our state contains node and chain information
+#[derive(Clone)]
 pub struct State {
     chains: DenseMap<ChainId, Chain>,
 

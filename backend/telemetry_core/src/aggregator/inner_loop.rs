@@ -17,11 +17,11 @@
 use super::aggregator::ConnId;
 use crate::feed_message::{self, FeedMessageSerializer, FeedMessageWriter};
 use crate::find_location;
-use crate::state::{self, BatchedState, NodeId, State};
+use crate::state::{BatchedState, NodeId, State};
 use bimap::BiMap;
 use common::node_types::Block;
 use common::{
-    internal_messages::{self, MuteReason, ShardNodeId},
+    internal_messages::{self, ShardNodeId},
     node_message,
     node_types::BlockHash,
     time, MultiMapUnique,
@@ -287,6 +287,16 @@ where
             .collect::<Vec<_>>()
             .into_iter()
             .for_each(|(feed, genesis)| self.finalize_and_broadcast_to_chain_feeds(&genesis, feed));
+
+        for (genesis_hash, feed) in self
+            .batched_node_state
+            .drain_chain_updates()
+            .collect::<Vec<_>>()
+        {
+            self.finalize_and_broadcast_to_chain_feeds(&genesis_hash, feed);
+        }
+        let feed_for_all = self.batched_node_state.drain_updates_for_all_feeds();
+        self.finalize_and_broadcast_to_all_feeds(feed_for_all);
     }
 
     /// Gather and return some metrics.
@@ -359,63 +369,21 @@ where
                 ip,
                 node,
                 genesis_hash,
-            } => {
-                match self.node_state.add_node(genesis_hash, node) {
-                    state::AddNodeResult::ChainOnDenyList => {
-                        if let Some(shard_conn) = self.shard_channels.get_mut(&shard_conn_id) {
-                            let _ = shard_conn.send(ToShardWebsocket::Mute {
-                                local_id,
-                                reason: MuteReason::ChainNotAllowed,
-                            });
-                        }
-                    }
-                    state::AddNodeResult::ChainOverQuota => {
-                        if let Some(shard_conn) = self.shard_channels.get_mut(&shard_conn_id) {
-                            let _ = shard_conn.send(ToShardWebsocket::Mute {
-                                local_id,
-                                reason: MuteReason::Overquota,
-                            });
-                        }
-                    }
-                    state::AddNodeResult::NodeAddedToChain(details) => {
-                        let node_id = details.id;
-
-                        // Record ID <-> (shardId,localId) for future messages:
-                        self.node_ids.insert(node_id, (shard_conn_id, local_id));
-
-                        // Don't hold onto details too long because we want &mut self later:
-                        let new_chain_label = details.new_chain_label.to_owned();
-                        let chain_node_count = details.chain_node_count;
-                        let has_chain_label_changed = details.has_chain_label_changed;
-
-                        // Tell chain subscribers about the node we've just added:
-                        let mut feed_messages_for_chain = FeedMessageSerializer::new();
-                        feed_messages_for_chain.push(feed_message::AddedNode(
-                            node_id.get_chain_node_id().into(),
-                            details.node,
-                        ));
-                        // TODO: batch node add updates
-                        self.finalize_and_broadcast_to_chain_feeds(
-                            &genesis_hash,
-                            feed_messages_for_chain,
-                        );
-                        // Tell everybody about the new node count and potential rename:
-                        let mut feed_messages_for_all = FeedMessageSerializer::new();
-                        if has_chain_label_changed {
-                            feed_messages_for_all.push(feed_message::RemovedChain(genesis_hash));
-                        }
-                        feed_messages_for_all.push(feed_message::AddedChain(
-                            &new_chain_label,
-                            genesis_hash,
-                            chain_node_count,
-                        ));
-                        self.finalize_and_broadcast_to_all_feeds(feed_messages_for_all);
-
-                        // Ask for the geographical location of the node.
-                        let _ = self.tx_to_locator.feed((node_id, ip));
+            } => match self
+                .batched_node_state
+                .add_node(genesis_hash, shard_conn_id, local_id, node)
+            {
+                Err(reason) => {
+                    if let Some(shard_conn) = self.shard_channels.get_mut(&shard_conn_id) {
+                        let _ = shard_conn.send(ToShardWebsocket::Mute { local_id, reason });
                     }
                 }
-            }
+                Ok(node_id) => {
+                    // Ask for the geographical location of the node.
+                    let _ = self.tx_to_locator.feed((node_id, ip));
+                }
+            },
+
             FromShardWebsocket::Remove { local_id } => {
                 let node_id = match self.node_ids.remove_by_right(&(shard_conn_id, local_id)) {
                     Some((node_id, _)) => node_id,
