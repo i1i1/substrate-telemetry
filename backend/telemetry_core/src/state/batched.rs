@@ -13,7 +13,7 @@ use common::{
     node_message,
     node_types::{BlockHash, NodeDetails},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Structure with accumulated chain updates
 #[derive(Default, Clone)]
@@ -39,11 +39,12 @@ pub struct State {
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
     /// which messages are about which nodes.
     node_ids: BiMap<NodeId, (ConnId, ShardNodeId)>,
-
     /// Encoded node messages. (Usually send during node initialization)
     ///
     /// Basically `prev` state encoded.
     chain_nodes: HashMap<BlockHash, Vec<ToFeedWebsocket>>,
+    /// Removed chains tracker
+    removed_chains: HashSet<BlockHash>,
 }
 
 impl State {
@@ -61,6 +62,7 @@ impl State {
             chains: HashMap::new(),
             node_ids: BiMap::new(),
             chain_nodes: HashMap::new(),
+            removed_chains: HashSet::new(),
         }
     }
 
@@ -74,10 +76,6 @@ impl State {
                 chain_label,
                 ..
             } = chain_updates;
-            if *node_count == 0 {
-                feed.push(feed_message::RemovedChain(*genesis_hash));
-                continue;
-            }
 
             if *has_chain_label_changed {
                 feed.push(feed_message::RemovedChain(*genesis_hash));
@@ -89,6 +87,9 @@ impl State {
                 *genesis_hash,
                 *node_count,
             ));
+        }
+        for genesis_hash in std::mem::take(&mut self.removed_chains) {
+            feed.push(feed_message::RemovedChain(genesis_hash))
         }
         feed
     }
@@ -123,6 +124,7 @@ impl State {
             AddNodeResult::ChainOverQuota => return Err(MuteReason::Overquota),
             AddNodeResult::ChainOnDenyList => return Err(MuteReason::ChainNotAllowed),
         };
+        self.removed_chains.remove(&genesis_hash);
 
         // Record ID <-> (shardId,localId) for future messages:
         self.node_ids.insert(node_id, (shard_conn_id, local_id));
@@ -204,7 +206,17 @@ impl State {
         }
 
         for (chain_label, node_ids) in node_ids_per_chain {
-            let updates = self.chains.entry(chain_label).or_default();
+            let updates = if let Some(updates) = self.chains.get_mut(&chain_label) {
+                updates
+            } else {
+                continue;
+            };
+            if updates.node_count == node_ids.len() {
+                drop(updates);
+                self.chains.remove(&chain_label);
+                self.removed_chains.insert(chain_label);
+                continue;
+            }
 
             for node_id in node_ids {
                 self.node_ids.remove_by_left(&node_id);
