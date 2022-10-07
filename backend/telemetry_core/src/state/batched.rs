@@ -213,4 +213,23 @@ impl State {
             }
         }
     }
+
+    pub fn update_node_location(&mut self, node_id: NodeId, location: Location) {
+        self.next.update_node_location(node_id, location.clone());
+
+        if let Some(loc) = location {
+            if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
+                self.chains
+                    .entry(chain.genesis_hash())
+                    .or_default()
+                    .feed
+                    .push(feed_message::LocatedNode(
+                        node_id.get_chain_node_id().into(),
+                        loc.latitude,
+                        loc.longitude,
+                        &loc.city,
+                    ));
+            }
+        }
+    }
 }

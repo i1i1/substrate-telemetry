@@ -231,9 +231,9 @@ where
                     ToAggregator::FromShardWebsocket(shard_conn_id, msg) => {
                         self.handle_from_shard(shard_conn_id, msg)
                     }
-                    ToAggregator::FromFindLocation(node_id, location) => {
-                        self.handle_from_find_location(node_id, location)
-                    }
+                    ToAggregator::FromFindLocation(node_id, location) => self
+                        .batched_node_state
+                        .update_node_location(node_id, location),
                     ToAggregator::SendUpdates => self.send_updates(),
                     ToAggregator::GatherMetrics(tx) => self.handle_gather_metrics(
                         tx,
@@ -328,34 +328,6 @@ where
             connected_feeds,
             connected_shards,
         });
-    }
-
-    /// Handle messages that come from the node geographical locator.
-    fn handle_from_find_location(&mut self, node_id: NodeId, location: find_location::Location) {
-        self.node_state
-            .update_node_location(node_id, location.clone());
-
-        if let Some(loc) = location {
-            let mut feed_message_serializer = FeedMessageSerializer::new();
-            feed_message_serializer.push(feed_message::LocatedNode(
-                node_id.get_chain_node_id().into(),
-                loc.latitude,
-                loc.longitude,
-                &loc.city,
-            ));
-
-            let chain_genesis_hash = self
-                .node_state
-                .get_chain_by_node_id(node_id)
-                .map(|chain| chain.genesis_hash());
-
-            if let Some(chain_genesis_hash) = chain_genesis_hash {
-                self.finalize_and_broadcast_to_chain_feeds(
-                    &chain_genesis_hash,
-                    feed_message_serializer,
-                );
-            }
-        }
     }
 
     /// Handle messages coming from shards.
