@@ -241,7 +241,7 @@ async fn e2e_feed_add_and_remove_node() {
 
     // Wait a little for this message to propagate to the core
     // (so that our feed connects after the core knows and not before).
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Connect a feed.
     let (_feed_tx, mut feed_rx) = server.get_core().connect_feed().await.unwrap();
@@ -307,7 +307,7 @@ async fn e2e_feeds_told_about_chain_rename_and_stay_subscribed() {
 
     // Wait a little for this message to propagate to the core so that
     // it knows what we're on about when we subscribe, below.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Connect a feed and subscribe to the above chain:
     let (feed_tx, mut feed_rx) = server.get_core().connect_feed().await.unwrap();
@@ -410,11 +410,13 @@ async fn e2e_feed_add_and_remove_shard() {
         shards.push((shard_id, node_tx));
     }
 
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
     // Connect a feed.
     let (_feed_tx, mut feed_rx) = server.get_core().connect_feed().await.unwrap();
 
     // The feed should be told about both of the chains that we've sent info about:
-    let feed_messages = feed_rx.recv_feed_messages().await.unwrap();
+    let feed_messages = dbg!(feed_rx.recv_feed_messages().await.unwrap());
     assert!(feed_messages.contains(&FeedMessage::AddedChain {
         name: "Local Testnet 1".to_owned(),
         genesis_hash: ghash(1),
@@ -486,6 +488,8 @@ async fn e2e_feed_can_subscribe_and_unsubscribe_from_chain() {
             ))
             .unwrap();
     }
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Connect a feed
     let (feed_tx, mut feed_rx) = server.get_core().connect_feed().await.unwrap();
@@ -721,6 +725,8 @@ async fn e2e_slow_feeds_are_disconnected() {
 /// spamming a load of message IDs and exhausting our memory.
 #[tokio::test]
 async fn e2e_max_nodes_per_connection_is_enforced() {
+    use FeedMessage::{AddedChain, BestBlock, BestFinalized};
+
     fdlimit::raise_fd_limit().unwrap();
 
     let mut server = start_server(
@@ -766,11 +772,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
         })
     };
 
+    // A bit more than 2 seconds
+    let timeout = Duration::from_secs(3);
+    tokio::time::sleep(timeout).await;
+
     // First message ID should lead to feed messages:
     node_tx.send_json_text(json_msg(1)).unwrap();
     assert_ne!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
             .len(),
@@ -781,7 +791,7 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     node_tx.send_json_text(json_msg(2)).unwrap();
     assert_ne!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
             .len(),
@@ -791,11 +801,13 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     // Third message ID should be ignored:
     node_tx.send_json_text(json_msg(3)).unwrap();
     assert_eq!(
-        feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
-            .await
-            .unwrap()
-            .len(),
+        dbg!(feed_rx.recv_feed_messages_timeout(timeout).await.unwrap())
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
@@ -803,10 +815,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     node_tx.send_json_text(json_msg(4)).unwrap();
     assert_eq!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
-            .len(),
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
@@ -828,10 +845,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     )).unwrap();
     assert_ne!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
-            .len(),
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
@@ -840,10 +862,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     )).unwrap();
     assert_ne!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
-            .len(),
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
@@ -854,10 +881,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     )).unwrap();
     assert_eq!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
-            .len(),
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
@@ -866,10 +898,15 @@ async fn e2e_max_nodes_per_connection_is_enforced() {
     )).unwrap();
     assert_eq!(
         feed_rx
-            .recv_feed_messages_timeout(Duration::from_secs(1))
+            .recv_feed_messages_timeout(timeout)
             .await
             .unwrap()
-            .len(),
+            .into_iter()
+            .filter(|update| !matches!(
+                update,
+                BestBlock { .. } | BestFinalized { .. } | AddedChain { node_count: 2, .. }
+            ))
+            .count(),
         0
     );
 
