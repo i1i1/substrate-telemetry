@@ -16,7 +16,7 @@
 
 use super::aggregator::ConnId;
 use crate::feed_message::{self, FeedMessageSerializer, FeedMessageWriter};
-use crate::find_location;
+use crate::find_location::Locator;
 use crate::state::{BatchedState, NodeId};
 use bimap::BiMap;
 use common::{
@@ -25,20 +25,19 @@ use common::{
     node_types::BlockHash,
     time, MultiMapUnique,
 };
-use futures::{Sink, SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use std::{net::IpAddr, str::FromStr};
 
 /// Incoming messages come via subscriptions, and end up looking like this.
 #[derive(Clone, Debug)]
 pub enum ToAggregator {
     FromShardWebsocket(ConnId, FromShardWebsocket),
     FromFeedWebsocket(ConnId, FromFeedWebsocket),
-    FromFindLocation(NodeId, find_location::Location),
     SendUpdates,
     /// Hand back some metrics. The provided sender is expected not to block when
     /// a message is sent into it.
@@ -154,7 +153,7 @@ pub enum ToFeedWebsocket {
 
 /// Instances of this are responsible for handling incoming and
 /// outgoing messages in the main aggregator loop.
-pub struct InnerLoop<L> {
+pub struct InnerLoop {
     /// The batched state of our chains and nodes lives here:
     node_state: BatchedState,
     /// We maintain a mapping between NodeId and ConnId+LocalId, so that we know
@@ -169,18 +168,17 @@ pub struct InnerLoop<L> {
     /// Which feeds are subscribed to a given chain?
     chain_to_feed_conn_ids: MultiMapUnique<BlockHash, ConnId>,
 
-    /// Send messages here to make geographical location requests.
-    tx_to_locator: L,
+    /// Geo locator from ip
+    locator: Locator,
 
     /// How big can the queue of messages coming in to the aggregator get before messages
     /// are prioritised and dropped to try and get back on track.
     max_queue_len: usize,
 }
 
-impl<L> InnerLoop<L> {
+impl InnerLoop {
     /// Create a new inner loop handler with the various state it needs.
     pub fn new(
-        tx_to_locator: L,
         denylist: Vec<String>,
         max_queue_len: usize,
         max_third_party_nodes: usize,
@@ -192,16 +190,11 @@ impl<L> InnerLoop<L> {
             feed_channels: HashMap::new(),
             shard_channels: HashMap::new(),
             chain_to_feed_conn_ids: MultiMapUnique::new(),
-            tx_to_locator,
+            locator: Locator::new(Default::default()),
             max_queue_len,
         }
     }
-}
 
-impl<L> InnerLoop<L>
-where
-    L: Sink<(NodeId, IpAddr)> + Send + Unpin + 'static,
-{
     /// Start handling and responding to incoming messages.
     pub async fn handle<E>(mut self, mut rx_from_external: E)
     where
@@ -227,9 +220,6 @@ where
                     }
                     ToAggregator::FromShardWebsocket(shard_conn_id, msg) => {
                         self.handle_from_shard(shard_conn_id, msg)
-                    }
-                    ToAggregator::FromFindLocation(node_id, location) => {
-                        self.node_state.update_node_location(node_id, location)
                     }
                     ToAggregator::SendUpdates => self.send_updates(),
                     ToAggregator::GatherMetrics(tx) => self.handle_gather_metrics(
@@ -329,8 +319,8 @@ where
                     }
                 }
                 Ok(node_id) => {
-                    // Ask for the geographical location of the node.
-                    let _ = self.tx_to_locator.feed((node_id, ip));
+                    self.node_state
+                        .update_node_location(node_id, self.locator.locate(ip));
                 }
             },
             FromShardWebsocket::Remove { local_id } => {
