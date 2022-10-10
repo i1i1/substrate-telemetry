@@ -4,18 +4,25 @@ use super::{
 };
 use crate::{
     aggregator::{ConnId, ToFeedWebsocket},
-    feed_message::{
-        self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter, FeedNodeId,
-    },
+    feed_message::{self, FeedMessageSerializer, FeedMessageWriter},
     find_location::Location,
 };
 use bimap::BiMap;
 use common::{
     internal_messages::{MuteReason, ShardNodeId},
-    node_message,
-    node_types::{BlockHash, NodeDetails},
+    node_message::{self, AfgAuthoritySet, Finalized, SystemConnected, SystemInterval},
+    node_types::{Block, BlockHash, NodeDetails},
 };
 use std::collections::{HashMap, HashSet};
+
+#[derive(Default, Clone)]
+struct NodeUpdates {
+    system_connected: Option<SystemConnected>,
+    system_interval: Option<SystemInterval>,
+    block_import: Option<Block>,
+    notify_finalized: Option<Finalized>,
+    afg_authority_set: Option<AfgAuthoritySet>,
+}
 
 /// Structure with accumulated chain updates
 #[derive(Default, Clone)]
@@ -28,8 +35,9 @@ struct ChainUpdates {
     /// Current chain label
     chain_label: Box<str>,
 
-    added_nodes: HashMap<FeedNodeId, Node>,
-    removed_nodes: HashSet<FeedNodeId>,
+    added_nodes: HashMap<NodeId, Node>,
+    removed_nodes: HashSet<NodeId>,
+    updated_nodes: HashMap<NodeId, NodeUpdates>,
 }
 
 /// Wrapper which batches updates to state.
@@ -116,10 +124,52 @@ impl State {
             .map(|(genesis_hash, updates)| {
                 let mut feed = std::mem::take(&mut updates.feed);
                 for removed_node in std::mem::take(&mut updates.removed_nodes) {
-                    feed.push(feed_message::RemovedNode(removed_node));
+                    feed.push(feed_message::RemovedNode(
+                        removed_node.get_chain_node_id().into(),
+                    ));
                 }
                 for (added_node_id, node) in std::mem::take(&mut updates.added_nodes) {
-                    feed.push(feed_message::AddedNode(added_node_id, &node));
+                    feed.push(feed_message::AddedNode(
+                        added_node_id.get_chain_node_id().into(),
+                        &node,
+                    ));
+                }
+                for (node_id, updates) in std::mem::take(&mut updates.updated_nodes) {
+                    use node_message::Payload::*;
+
+                    // TODO: decouple updating and serializing in a nice way.
+                    if let Some(connected) = updates.system_connected {
+                        self.next.update_node(
+                            node_id.clone(),
+                            &SystemConnected(connected),
+                            &mut feed,
+                        );
+                    }
+                    if let Some(interval) = updates.system_interval {
+                        self.next.update_node(
+                            node_id.clone(),
+                            &SystemInterval(interval),
+                            &mut feed,
+                        );
+                    }
+                    if let Some(import) = updates.block_import {
+                        self.next
+                            .update_node(node_id.clone(), &BlockImport(import), &mut feed);
+                    }
+                    if let Some(finalized) = updates.notify_finalized {
+                        self.next.update_node(
+                            node_id.clone(),
+                            &NotifyFinalized(finalized),
+                            &mut feed,
+                        );
+                    }
+                    if let Some(authority) = updates.afg_authority_set {
+                        self.next.update_node(
+                            node_id.clone(),
+                            &AfgAuthoritySet(authority),
+                            &mut feed,
+                        );
+                    }
                 }
                 (*genesis_hash, feed)
             })
@@ -152,9 +202,8 @@ impl State {
         let updates = self.chains.entry(genesis_hash).or_default();
 
         if self.send_node_data {
-            let id = node_id.get_chain_node_id().into();
-            updates.removed_nodes.remove(&id);
-            updates.added_nodes.insert(id, node.clone());
+            updates.removed_nodes.remove(&node_id);
+            updates.added_nodes.insert(node_id, node.clone());
         }
 
         updates.has_chain_label_changed = has_chain_label_changed;
@@ -181,14 +230,30 @@ impl State {
                 return;
             }
         };
-        if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
-            if self.send_node_data {
-                let updates = self.chains.entry(chain.genesis_hash()).or_default();
-                self.next.update_node(node_id, payload, &mut updates.feed);
-            } else {
-                self.next
-                    .update_node(node_id, payload, &mut DiscardFeedMessages);
-            }
+
+        if !self.send_node_data {
+            return;
+        }
+
+        let updates = if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
+            self.chains
+                .entry(chain.genesis_hash())
+                .or_default()
+                .updated_nodes
+                .entry(node_id)
+                .or_default()
+        } else {
+            return;
+        };
+
+        use node_message::Payload::*;
+
+        match payload {
+            SystemConnected(connected) => updates.system_connected = Some(connected),
+            SystemInterval(interval) => updates.system_interval = Some(interval),
+            BlockImport(import) => updates.block_import = Some(import),
+            NotifyFinalized(finalized) => updates.notify_finalized = Some(finalized),
+            AfgAuthoritySet(authority) => updates.afg_authority_set = Some(authority),
         }
     }
 
@@ -261,9 +326,9 @@ impl State {
                 updates.chain_label = new_chain_label.clone();
                 updates.node_count = chain_node_count;
                 if self.send_node_data {
-                    let id = node_id.get_chain_node_id().into();
-                    updates.added_nodes.remove(&id);
-                    updates.removed_nodes.insert(id);
+                    updates.added_nodes.remove(&node_id);
+                    updates.updated_nodes.remove(&node_id);
+                    updates.removed_nodes.insert(node_id);
                 }
             }
         }

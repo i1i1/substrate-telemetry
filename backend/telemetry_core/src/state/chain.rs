@@ -161,7 +161,7 @@ impl Chain {
     pub fn update_node(
         &mut self,
         nid: ChainNodeId,
-        payload: Payload,
+        payload: &Payload,
         feed: &mut impl FeedMessageWriter,
     ) {
         if let Some(block) = payload.best_block() {
