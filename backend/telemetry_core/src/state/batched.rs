@@ -1,10 +1,12 @@
 use super::{
     state::{State as OrdinaryState, StateChain},
-    AddNodeResult, NodeAddedToChain, NodeId, RemovedNode,
+    AddNodeResult, Node, NodeAddedToChain, NodeId, RemovedNode,
 };
 use crate::{
     aggregator::{ConnId, ToFeedWebsocket},
-    feed_message::{self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter},
+    feed_message::{
+        self, DiscardFeedMessages, FeedMessageSerializer, FeedMessageWriter, FeedNodeId,
+    },
     find_location::Location,
 };
 use bimap::BiMap;
@@ -25,6 +27,9 @@ struct ChainUpdates {
     has_chain_label_changed: bool,
     /// Current chain label
     chain_label: Box<str>,
+
+    added_nodes: HashMap<FeedNodeId, Node>,
+    removed_nodes: HashSet<FeedNodeId>,
 }
 
 /// Wrapper which batches updates to state.
@@ -108,7 +113,16 @@ impl State {
         self.chains
             .iter_mut()
             .filter(|(_, updates)| updates.node_count != 0)
-            .map(|(genesis_hash, updates)| (*genesis_hash, std::mem::take(&mut updates.feed)))
+            .map(|(genesis_hash, updates)| {
+                let mut feed = std::mem::take(&mut updates.feed);
+                for removed_node in std::mem::take(&mut updates.removed_nodes) {
+                    feed.push(feed_message::RemovedNode(removed_node));
+                }
+                for (added_node_id, node) in std::mem::take(&mut updates.added_nodes) {
+                    feed.push(feed_message::AddedNode(added_node_id, &node));
+                }
+                (*genesis_hash, feed)
+            })
     }
 
     pub fn add_node(
@@ -138,11 +152,9 @@ impl State {
         let updates = self.chains.entry(genesis_hash).or_default();
 
         if self.send_node_data {
-            // Tell chain subscribers about the node we've just added:
-            updates.feed.push(feed_message::AddedNode(
-                node_id.get_chain_node_id().into(),
-                node,
-            ));
+            let id = node_id.get_chain_node_id().into();
+            updates.removed_nodes.remove(&id);
+            updates.added_nodes.insert(id, node.clone());
         }
 
         updates.has_chain_label_changed = has_chain_label_changed;
@@ -249,9 +261,9 @@ impl State {
                 updates.chain_label = new_chain_label.clone();
                 updates.node_count = chain_node_count;
                 if self.send_node_data {
-                    updates.feed.push(feed_message::RemovedNode(
-                        node_id.get_chain_node_id().into(),
-                    ));
+                    let id = node_id.get_chain_node_id().into();
+                    updates.added_nodes.remove(&id);
+                    updates.removed_nodes.insert(id);
                 }
             }
         }

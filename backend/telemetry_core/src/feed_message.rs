@@ -25,7 +25,7 @@ use common::node_types::{
 };
 use serde_json::to_writer;
 
-type FeedNodeId = usize;
+pub type FeedNodeId = usize;
 
 pub trait FeedMessage {
     const ACTION: u8;
