@@ -362,17 +362,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "delegate"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "082a24a9967533dc5d743c602157637116fc1b52806d694a5a45e6f32567fcdd"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "digest"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1647,7 +1636,6 @@ dependencies = [
  "bytes",
  "common",
  "criterion",
- "delegate",
  "fdlimit",
  "flume",
  "futures",

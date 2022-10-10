@@ -61,13 +61,6 @@ pub struct State {
 }
 
 impl State {
-    delegate::delegate! {
-        to self.prev {
-            pub fn iter_chains(&self) -> impl Iterator<Item = StateChain<'_>>;
-            pub fn get_chain_by_genesis_hash(&self, genesis_hash: &BlockHash) -> Option<StateChain<'_>>;
-        }
-    }
-
     pub fn new(
         denylist: impl IntoIterator<Item = String>,
         max_third_party_nodes: usize,
@@ -82,6 +75,13 @@ impl State {
             removed_chains: HashSet::new(),
             send_node_data,
         }
+    }
+
+    pub fn iter_chains(&self) -> impl Iterator<Item = StateChain<'_>> {
+        self.prev.iter_chains()
+    }
+    pub fn get_chain_by_genesis_hash(&self, genesis_hash: &BlockHash) -> Option<StateChain<'_>> {
+        self.prev.get_chain_by_genesis_hash(genesis_hash)
     }
 
     /// Drain updates for all feeds and return serializer.
