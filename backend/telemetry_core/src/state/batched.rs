@@ -22,13 +22,12 @@ struct NodeUpdates {
     block_import: Option<Block>,
     notify_finalized: Option<Finalized>,
     afg_authority_set: Option<AfgAuthoritySet>,
+    location: Location,
 }
 
 /// Structure with accumulated chain updates
 #[derive(Default, Clone)]
 struct ChainUpdates {
-    /// Chain feed with all its updates
-    feed: FeedMessageSerializer,
     /// Current node count
     node_count: usize,
     has_chain_label_changed: bool,
@@ -122,7 +121,8 @@ impl State {
             .iter_mut()
             .filter(|(_, updates)| updates.node_count != 0)
             .map(|(genesis_hash, updates)| {
-                let mut feed = std::mem::take(&mut updates.feed);
+                let mut feed = FeedMessageSerializer::new();
+
                 for removed_node in std::mem::take(&mut updates.removed_nodes) {
                     feed.push(feed_message::RemovedNode(
                         removed_node.get_chain_node_id().into(),
@@ -136,6 +136,15 @@ impl State {
                 }
                 for (node_id, updates) in std::mem::take(&mut updates.updated_nodes) {
                     use node_message::Payload::*;
+
+                    if let Some(loc) = updates.location {
+                        feed.push(feed_message::LocatedNode(
+                            node_id.get_chain_node_id().into(),
+                            loc.latitude,
+                            loc.longitude,
+                            &loc.city,
+                        ))
+                    }
 
                     // TODO: decouple updating and serializing in a nice way.
                     if let Some(connected) = updates.system_connected {
@@ -164,11 +173,8 @@ impl State {
                         );
                     }
                     if let Some(authority) = updates.afg_authority_set {
-                        self.next.update_node(
-                            node_id.clone(),
-                            &AfgAuthoritySet(authority),
-                            &mut feed,
-                        );
+                        self.next
+                            .update_node(node_id, &AfgAuthoritySet(authority), &mut feed);
                     }
                 }
                 (*genesis_hash, feed)
@@ -340,16 +346,14 @@ impl State {
         if self.send_node_data {
             if let Some(loc) = location {
                 if let Some(chain) = self.next.get_chain_by_node_id(node_id) {
-                    self.chains
+                    let updates = self
+                        .chains
                         .entry(chain.genesis_hash())
                         .or_default()
-                        .feed
-                        .push(feed_message::LocatedNode(
-                            node_id.get_chain_node_id().into(),
-                            loc.latitude,
-                            loc.longitude,
-                            &loc.city,
-                        ));
+                        .updated_nodes
+                        .entry(node_id)
+                        .or_default();
+                    updates.location = Some(loc);
                 }
             }
         }
